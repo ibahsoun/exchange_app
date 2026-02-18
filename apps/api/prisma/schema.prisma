@@ -1,0 +1,152 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Rate system ─────────────────────────────────────────────
+
+model RateSource {
+  id        String   @id @default(cuid())
+  name      String   @unique          // "mock", "openexchangerates", "xe"
+  status    String   @default("active") // active, disabled, error
+  priority  Int      @default(0)
+  config    Json?                      // provider-specific config (API keys etc)
+  rates     Rate[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Rate {
+  id        String     @id @default(cuid())
+  base      String                     // "USD"
+  quote     String                     // "EUR"
+  bid       Decimal    @db.Decimal(18, 8)
+  ask       Decimal    @db.Decimal(18, 8)
+  mid       Decimal    @db.Decimal(18, 8)
+  spread    Decimal    @db.Decimal(18, 8)
+  sourceId  String
+  source    RateSource @relation(fields: [sourceId], references: [id])
+  timestamp DateTime   @default(now())
+
+  @@unique([base, quote, sourceId])
+  @@index([base, quote])
+  @@index([timestamp])
+}
+
+model RateSnapshot {
+  id        String   @id @default(cuid())
+  base      String
+  quote     String
+  bid       Decimal  @db.Decimal(18, 8)
+  ask       Decimal  @db.Decimal(18, 8)
+  mid       Decimal  @db.Decimal(18, 8)
+  source    String
+  timestamp DateTime @default(now())
+
+  @@index([base, quote, timestamp])
+}
+
+model ManualOverride {
+  id        String   @id @default(cuid())
+  base      String
+  quote     String
+  bid       Decimal  @db.Decimal(18, 8)
+  ask       Decimal  @db.Decimal(18, 8)
+  enabled   Boolean  @default(true)
+  reason    String?
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([base, quote])
+}
+
+// ─── Existing models ─────────────────────────────────────────
+
+model Customer {
+  id             String   @id @default(cuid())
+  customerId     String   @unique
+  fullName       String
+  nationality    String
+  documentType   String
+  documentNumber String
+  documentExpiry DateTime
+  expiryStatus   String   @default("VALID")
+  riskLevel      String   @default("LOW")
+  lifetimeVolume Decimal  @default(0)
+  preferredPair  String?
+  activeSince    DateTime @default(now())
+  avatarUrl      String?
+  notes          String?
+  transactions   Transaction[]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  receiptId   String   @unique
+  customerId  String
+  customer    Customer @relation(fields: [customerId], references: [id])
+  type        String                        // BUY, SELL, SWAP
+  base        String                        // base currency code
+  quote       String                        // quote currency code
+  amountIn    Decimal  @db.Decimal(18, 2)   // customer pays
+  amountOut   Decimal  @db.Decimal(18, 2)   // customer receives
+  rateApplied Decimal  @db.Decimal(18, 8)   // effective rate applied
+  spread      Decimal  @db.Decimal(18, 8)   // spread at time of trade
+  status      String   @default("PENDING")  // COMPLETED, PENDING, FAILED, CANCELLED
+  tellerId    String?                       // teller who processed
+  kycName     String?
+  kycDocId    String?
+  kycPurpose  String?
+  kycSource   String?
+  createdAt   DateTime @default(now())
+
+  @@index([customerId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([base, quote])
+}
+
+model VaultCurrency {
+  id            String              @id @default(cuid())
+  currency      String              @unique
+  currencyName  String
+  vaultName     String
+  totalAmount   Decimal             @db.Decimal(18, 2)
+  alertLevel    String              @default("HEALTHY") // HEALTHY, MINOR_ALERT, CRITICAL
+  denominations VaultDenomination[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+}
+
+model VaultDenomination {
+  id              String        @id @default(cuid())
+  vaultCurrencyId String
+  vaultCurrency   VaultCurrency @relation(fields: [vaultCurrencyId], references: [id])
+  label           String
+  units           Int
+  amount          Decimal       @db.Decimal(18, 2)
+  level           String        @default("normal") // healthy, normal, low, critical
+
+  @@index([vaultCurrencyId])
+}
+
+model VaultAdjustment {
+  id         String   @id @default(cuid())
+  currency   String
+  amount     Decimal  @db.Decimal(18, 2)
+  type       String                       // INBOUND, OUTBOUND, MANUAL
+  notes      String?
+  user       String
+  status     String   @default("PENDING") // VERIFIED, PENDING, REJECTED
+  createdAt  DateTime @default(now())
+
+  @@index([currency])
+  @@index([createdAt])
+}
