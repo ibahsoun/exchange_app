@@ -3,18 +3,18 @@ import { cn } from '@/lib/utils';
 import {
   LayoutDashboard,
   TrendingUp,
+  GitCompareArrows,
   ArrowLeftRight,
   Users,
-  Vault,
   Settings,
 } from 'lucide-react';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/live-rates', label: 'Live Rates', icon: TrendingUp },
+  { to: '/source-comparison', label: 'Source Compare', icon: GitCompareArrows },
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight },
   { to: '/customers', label: 'Customers', icon: Users },
-  { to: '/vault', label: 'Vault Inventory', icon: Vault },
 ];
 
 export function Sidebar() {

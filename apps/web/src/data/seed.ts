@@ -1,4 +1,4 @@
-import type { CurrencyRate, Transaction, Customer, VaultCurrency, VaultAdjustment, MarketSummary, VaultSummary } from '@exchange/shared';
+import type { CurrencyRate, Transaction, MarketSummary } from '@exchange/shared';
 
 // ─── MARKET RATES (Live Rates page + Dashboard sidebar) ─────────────────
 export const marketSummary: MarketSummary = {
@@ -51,88 +51,4 @@ export const transactions: Transaction[] = [
   { id: '12', receiptId: 'TX-99270', customerId: '2', customerName: 'Maria Al-Sayed',   customerInitials: 'MA', type: 'BUY',  base: 'USD', quote: 'ARS', amountIn: 2000.00,   amountOut: 1691000.00, rateApplied: 845.50, spread: 9.50,   status: 'CANCELLED', tellerId: 'TELLER-04A', createdAt: '2024-11-22T14:12:18Z' },
 ];
 
-// ─── CUSTOMERS ───────────────────────────────────────────────────────────
-export const customers: Customer[] = [
-  { id: '1',  customerId: 'CUST-9921', fullName: 'Julian Reinhardt',  nationality: 'Germany',     documentType: 'Passport',     documentNumber: 'DE-29381742', documentExpiry: '2027-03-15', expiryStatus: 'VALID',    riskLevel: 'LOW',    lifetimeVolume: 42000,  preferredPair: 'EUR/USD', activeSince: '2020-06-12', avatarUrl: null, notes: null, lastTransaction: '1 day ago',   createdAt: '2020-06-12', updatedAt: '2024-11-24' },
-  { id: '2',  customerId: 'CUST-4402', fullName: 'Sarah Al-Fayed',   nationality: 'UAE',         documentType: 'Resident ID',  documentNumber: 'R-44218903',  documentExpiry: '2025-03-05', expiryStatus: 'EXPIRING', riskLevel: 'MEDIUM', lifetimeVolume: 128900, preferredPair: 'AED/USD', activeSince: '2021-01-08', avatarUrl: null, notes: 'VIP client — priority processing requested. Requires dedicated teller.', lastTransaction: '2 days ago',  createdAt: '2021-01-08', updatedAt: '2024-11-24' },
-  { id: '3',  customerId: 'CUST-3188', fullName: 'Wei Chen',         nationality: 'China',       documentType: 'Passport',     documentNumber: 'CN-88712345', documentExpiry: '2022-08-20', expiryStatus: 'EXPIRED',  riskLevel: 'LOW',    lifetimeVolume: 1200,   preferredPair: 'CNY/USD', activeSince: '2022-03-20', avatarUrl: null, notes: null, lastTransaction: '15 days ago', createdAt: '2022-03-20', updatedAt: '2024-10-10' },
-  { id: '4',  customerId: 'CUST-8812', fullName: 'Elena Popova',     nationality: 'Bulgaria',    documentType: 'EU ID Card',   documentNumber: 'BG-55129900', documentExpiry: '2028-12-01', expiryStatus: 'VALID',    riskLevel: 'LOW',    lifetimeVolume: 15000,  preferredPair: 'EUR/USD', activeSince: '2019-11-30', avatarUrl: null, notes: null, lastTransaction: '5 days ago',  createdAt: '2019-11-30', updatedAt: '2024-10-20' },
-  { id: '5',  customerId: 'CUST-1029', fullName: 'Marcus Thorne',    nationality: 'UK',          documentType: 'Passport',     documentNumber: 'UK-33981200', documentExpiry: '2026-07-18', expiryStatus: 'VALID',    riskLevel: 'LOW',    lifetimeVolume: 8700,   preferredPair: 'GBP/USD', activeSince: '2021-05-14', avatarUrl: null, notes: null, lastTransaction: '3 days ago',  createdAt: '2021-05-14', updatedAt: '2024-10-22' },
-  { id: '6',  customerId: 'CUST-7731', fullName: 'Alejandro Vega',   nationality: 'Argentina',   documentType: 'DNI',          documentNumber: 'AR-12994821', documentExpiry: '2029-01-10', expiryStatus: 'VALID',    riskLevel: 'HIGH',   lifetimeVolume: 310500, preferredPair: 'ARS/USD', activeSince: '2019-03-05', avatarUrl: null, notes: '[FLAGGED] Multiple large cash deposits exceeding $50k in rolling 30-day window. SAR filed 2024-09-15.', lastTransaction: '12 hours ago', createdAt: '2019-03-05', updatedAt: '2024-11-24' },
-  { id: '7',  customerId: 'CUST-5519', fullName: 'Yuki Tanaka',      nationality: 'Japan',       documentType: 'Passport',     documentNumber: 'JP-44829100', documentExpiry: '2027-09-22', expiryStatus: 'VALID',    riskLevel: 'LOW',    lifetimeVolume: 67200,  preferredPair: 'JPY/USD', activeSince: '2022-07-01', avatarUrl: null, notes: null, lastTransaction: '1 week ago',  createdAt: '2022-07-01', updatedAt: '2024-11-18' },
-  { id: '8',  customerId: 'CUST-2205', fullName: 'Fatima Hassan',    nationality: 'Egypt',       documentType: 'Passport',     documentNumber: 'EG-77541233', documentExpiry: '2025-01-30', expiryStatus: 'EXPIRING', riskLevel: 'LOW',    lifetimeVolume: 23400,  preferredPair: 'EUR/USD', activeSince: '2023-02-14', avatarUrl: null, notes: null, lastTransaction: '4 days ago',  createdAt: '2023-02-14', updatedAt: '2024-11-20' },
-  { id: '9',  customerId: 'CUST-6610', fullName: 'Pierre Dubois',    nationality: 'France',      documentType: 'EU ID Card',   documentNumber: 'FR-88123400', documentExpiry: '2026-06-30', expiryStatus: 'VALID',    riskLevel: 'MEDIUM', lifetimeVolume: 89100,  preferredPair: 'EUR/USD', activeSince: '2020-11-22', avatarUrl: null, notes: 'Under enhanced monitoring — source of funds review pending.', lastTransaction: '6 days ago',  createdAt: '2020-11-22', updatedAt: '2024-11-15' },
-  { id: '10', customerId: 'CUST-3399', fullName: 'Ana Ferreira',     nationality: 'Brazil',      documentType: 'Passport',     documentNumber: 'BR-55128700', documentExpiry: '2025-11-12', expiryStatus: 'VALID',    riskLevel: 'LOW',    lifetimeVolume: 5800,   preferredPair: 'BRL/USD', activeSince: '2024-01-20', avatarUrl: null, notes: null, lastTransaction: '2 weeks ago', createdAt: '2024-01-20', updatedAt: '2024-11-10' },
-];
 
-// ─── VAULT INVENTORY ─────────────────────────────────────────────────────
-export const vaultCurrencies: VaultCurrency[] = [
-  {
-    id: '1', currency: 'USD', currencyName: 'US Dollar', vaultName: 'Primary Vault',
-    totalAmount: 145200.00, alertLevel: 'CRITICAL',
-    denominations: [
-      { id: 'd1', label: '$100 Bills', units: 1200, amount: 120000, level: 'healthy' },
-      { id: 'd2', label: '$50 Bills', units: 400, amount: 20000, level: 'normal' },
-      { id: 'd3', label: '$20 Bills', units: 150, amount: 3000, level: 'critical' },
-      { id: 'd4', label: '$10 Bills', units: 200, amount: 2000, level: 'low' },
-    ],
-  },
-  {
-    id: '2', currency: 'EUR', currencyName: 'Euro', vaultName: 'Zone 1 Bins',
-    totalAmount: 82000.00, alertLevel: 'HEALTHY',
-    denominations: [
-      { id: 'd5', label: '€500 Bills', units: 100, amount: 50000, level: 'healthy' },
-      { id: 'd6', label: '€200 Bills', units: 110, amount: 22000, level: 'healthy' },
-      { id: 'd7', label: '€100 Bills', units: 80, amount: 8000, level: 'normal' },
-      { id: 'd8', label: '€50 Bills', units: 40, amount: 2000, level: 'normal' },
-    ],
-  },
-  {
-    id: '3', currency: 'GBP', currencyName: 'British Pound', vaultName: 'Vault Secure B',
-    totalAmount: 64500.00, alertLevel: 'MINOR_ALERT',
-    denominations: [
-      { id: 'd9', label: '£50 Notes', units: 1000, amount: 50000, level: 'healthy' },
-      { id: 'd10', label: '£20 Notes', units: 500, amount: 10000, level: 'low' },
-      { id: 'd11', label: '£10 Notes', units: 400, amount: 4000, level: 'normal' },
-      { id: 'd12', label: '£5 Notes', units: 100, amount: 500, level: 'critical' },
-    ],
-  },
-  {
-    id: '4', currency: 'JPY', currencyName: 'Japanese Yen', vaultName: 'East Wing Safe',
-    totalAmount: 22450000.00, alertLevel: 'HEALTHY',
-    denominations: [
-      { id: 'd13', label: '¥10,000 Bills', units: 1800, amount: 18000000, level: 'healthy' },
-      { id: 'd14', label: '¥5,000 Bills', units: 600, amount: 3000000, level: 'normal' },
-      { id: 'd15', label: '¥1,000 Bills', units: 1450, amount: 1450000, level: 'normal' },
-    ],
-  },
-  {
-    id: '5', currency: 'CHF', currencyName: 'Swiss Franc', vaultName: 'Vault Secure A',
-    totalAmount: 38500.00, alertLevel: 'CRITICAL',
-    denominations: [
-      { id: 'd16', label: 'Fr.1000 Bills', units: 25, amount: 25000, level: 'low' },
-      { id: 'd17', label: 'Fr.200 Bills', units: 50, amount: 10000, level: 'normal' },
-      { id: 'd18', label: 'Fr.100 Bills', units: 35, amount: 3500, level: 'critical' },
-    ],
-  },
-];
-
-export const vaultSummary: VaultSummary = {
-  totalValue: 1245800.00,
-  valueChange: 0.42,
-  criticalAlerts: 2,
-  minorAlerts: 1,
-  alertCurrencies: ['USD', 'CHF', 'GBP'],
-  inventoryHealth: 'Warning',
-  totalCurrencies: 5,
-};
-
-export const vaultAdjustments: VaultAdjustment[] = [
-  { id: '1', currency: 'USD', amount: 25000.00,  type: 'INBOUND',  notes: 'CIT delivery — Brinks',                     user: 'S. Henderson (Lead)', status: 'VERIFIED', createdAt: '2024-11-24T12:45:12Z' },
-  { id: '2', currency: 'EUR', amount: -5000.00,   type: 'OUTBOUND', notes: 'Wholesale order #WO-2291',                  user: 'M. Kovic',            status: 'VERIFIED', createdAt: '2024-11-24T11:20:05Z' },
-  { id: '3', currency: 'GBP', amount: 2500.00,    type: 'MANUAL',   notes: 'Recount adjustment — off by +2,500',        user: 'S. Henderson (Lead)', status: 'PENDING',  createdAt: '2024-11-24T09:15:44Z' },
-  { id: '4', currency: 'USD', amount: -12500.00,  type: 'OUTBOUND', notes: 'Transaction TX-99281 — customer withdrawal', user: 'M. Teller',           status: 'VERIFIED', createdAt: '2024-11-24T08:30:22Z' },
-  { id: '5', currency: 'JPY', amount: 5000000.00, type: 'INBOUND',  notes: 'Branch transfer from HQ',                   user: 'S. Henderson (Lead)', status: 'VERIFIED', createdAt: '2024-11-23T16:10:45Z' },
-  { id: '6', currency: 'CHF', amount: -8000.00,   type: 'OUTBOUND', notes: 'Customer swap CHF→EUR',                     user: 'M. Kovic',            status: 'VERIFIED', createdAt: '2024-11-23T14:55:10Z' },
-  { id: '7', currency: 'EUR', amount: 15000.00,   type: 'INBOUND',  notes: 'CIT delivery — G4S',                        user: 'S. Henderson (Lead)', status: 'PENDING',  createdAt: '2024-11-23T10:05:33Z' },
-];

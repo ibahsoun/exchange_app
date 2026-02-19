@@ -3,15 +3,24 @@ import { RatesController } from './rates.controller';
 import { RatesService } from './rates.service';
 import { RatesGateway } from './rates.gateway';
 import { RatesScheduler } from './rates.scheduler';
-import { MockRateProvider } from './providers';
-import { RATE_PROVIDER } from './rates.constants';
+import { MultiSourceController } from './multi-source.controller';
+import { MultiSourceService } from './multi-source.service';
+import {
+  MockRateProvider,
+  CurrencyFreaksProvider,
+  XeProvider,
+  TwelveDataProvider,
+  OandaProvider,
+} from './providers';
+import { RATE_PROVIDER, MULTI_SOURCE_PROVIDERS } from './rates.constants';
 
 @Module({
-  controllers: [RatesController],
+  controllers: [RatesController, MultiSourceController],
   providers: [
     RatesService,
     RatesGateway,
     RatesScheduler,
+    MultiSourceService,
     {
       provide: RATE_PROVIDER,
       useFactory: () => {
@@ -19,7 +28,16 @@ import { RATE_PROVIDER } from './rates.constants';
         return new MockRateProvider();
       },
     },
+    {
+      provide: MULTI_SOURCE_PROVIDERS,
+      useFactory: () => [
+        new CurrencyFreaksProvider(),
+        new XeProvider(),
+        new TwelveDataProvider(),
+        new OandaProvider(),
+      ],
+    },
   ],
-  exports: [RatesService],
+  exports: [RatesService, MultiSourceService],
 })
 export class RatesModule {}

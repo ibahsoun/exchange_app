@@ -65,26 +65,50 @@ model ManualOverride {
   @@unique([base, quote])
 }
 
+// ─── Multi-source rate comparison ────────────────────────────
+
+model RateTick {
+  id        String   @id @default(cuid())
+  base      String                        // "USD"
+  quote     String                        // "EUR"
+  source    String                        // "currencyfreaks", "xe", "twelvedata", "oanda"
+  bid       Decimal? @db.Decimal(18, 8)   // nullable — some sources only provide mid
+  ask       Decimal? @db.Decimal(18, 8)
+  mid       Decimal  @db.Decimal(18, 8)
+  latencyMs Int                           // fetch latency in ms
+  timestamp DateTime @default(now())
+
+  @@index([base, quote, source])
+  @@index([timestamp])
+}
+
+model StoreRate {
+  id         String   @id @default(cuid())
+  base       String                        // "USD"
+  quote      String                        // "EUR"
+  mid        Decimal  @db.Decimal(18, 8)
+  mode       String   @default("AUTO_AVG") // AUTO_AVG, MANUAL_SOURCE, CUSTOM_VALUE, LOCKED
+  sourceHint String?                       // which source if MANUAL_SOURCE
+  reason     String?                       // why locked/custom
+  updatedBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([base, quote])
+}
+
 // ─── Existing models ─────────────────────────────────────────
 
 model Customer {
-  id             String   @id @default(cuid())
-  customerId     String   @unique
-  fullName       String
-  nationality    String
-  documentType   String
-  documentNumber String
-  documentExpiry DateTime
-  expiryStatus   String   @default("VALID")
-  riskLevel      String   @default("LOW")
-  lifetimeVolume Decimal  @default(0)
-  preferredPair  String?
-  activeSince    DateTime @default(now())
-  avatarUrl      String?
-  notes          String?
-  transactions   Transaction[]
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id           String        @id @default(cuid())
+  customerId   String        @unique
+  name         String
+  phone        String?
+  email        String?
+  level        Int           @default(3) // 1-5 star rating
+  transactions Transaction[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 }
 
 model Transaction {
@@ -101,10 +125,6 @@ model Transaction {
   spread      Decimal  @db.Decimal(18, 8)   // spread at time of trade
   status      String   @default("PENDING")  // COMPLETED, PENDING, FAILED, CANCELLED
   tellerId    String?                       // teller who processed
-  kycName     String?
-  kycDocId    String?
-  kycPurpose  String?
-  kycSource   String?
   createdAt   DateTime @default(now())
 
   @@index([customerId])
@@ -113,40 +133,3 @@ model Transaction {
   @@index([base, quote])
 }
 
-model VaultCurrency {
-  id            String              @id @default(cuid())
-  currency      String              @unique
-  currencyName  String
-  vaultName     String
-  totalAmount   Decimal             @db.Decimal(18, 2)
-  alertLevel    String              @default("HEALTHY") // HEALTHY, MINOR_ALERT, CRITICAL
-  denominations VaultDenomination[]
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
-}
-
-model VaultDenomination {
-  id              String        @id @default(cuid())
-  vaultCurrencyId String
-  vaultCurrency   VaultCurrency @relation(fields: [vaultCurrencyId], references: [id])
-  label           String
-  units           Int
-  amount          Decimal       @db.Decimal(18, 2)
-  level           String        @default("normal") // healthy, normal, low, critical
-
-  @@index([vaultCurrencyId])
-}
-
-model VaultAdjustment {
-  id         String   @id @default(cuid())
-  currency   String
-  amount     Decimal  @db.Decimal(18, 2)
-  type       String                       // INBOUND, OUTBOUND, MANUAL
-  notes      String?
-  user       String
-  status     String   @default("PENDING") // VERIFIED, PENDING, REJECTED
-  createdAt  DateTime @default(now())
-
-  @@index([currency])
-  @@index([createdAt])
-}

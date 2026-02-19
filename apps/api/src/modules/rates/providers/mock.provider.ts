@@ -20,6 +20,7 @@ const BASE_RATES: Record<string, number> = {
   CAD: 1.3550,
   AUD: 1.5290,
   XAU: 0.000475, // USD per troy ounce inverted → 1/2105
+  LBP: 89550.0,
 };
 
 // Typical spread in pips for each pair
@@ -37,6 +38,7 @@ const SPREADS: Record<string, number> = {
   CAD: 0.003,
   AUD: 0.003,
   XAU: 0.000002,
+  LBP: 500.0,
 };
 
 const SUPPORTED_QUOTES = Object.keys(BASE_RATES);

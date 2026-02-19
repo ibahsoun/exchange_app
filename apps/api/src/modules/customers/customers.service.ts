@@ -1,12 +1,17 @@
-import { Injectable, NotFoundException, Logger, Inject } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, Inject } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 
 export interface CustomerFilters {
   search?: string;
-  riskLevel?: string;
-  expiryStatus?: string;
   page?: number;
   limit?: number;
+}
+
+export interface CreateCustomerDto {
+  name: string;
+  phone?: string;
+  email?: string;
+  level?: number;
 }
 
 @Injectable()
@@ -16,24 +21,16 @@ export class CustomersService {
   constructor(@Inject(PrismaService) private prisma: PrismaService) {}
 
   async findAll(filters: CustomerFilters = {}) {
-    const { search, riskLevel, expiryStatus, page = 1, limit = 25 } = filters;
+    const { search, page = 1, limit = 25 } = filters;
 
     const where: Record<string, unknown> = {};
 
-    if (riskLevel && riskLevel !== 'ALL') {
-      where.riskLevel = riskLevel;
-    }
-
-    if (expiryStatus && expiryStatus !== 'ALL') {
-      where.expiryStatus = expiryStatus;
-    }
-
     if (search) {
       where.OR = [
-        { fullName: { contains: search, mode: 'insensitive' } },
+        { name: { contains: search, mode: 'insensitive' } },
         { customerId: { contains: search, mode: 'insensitive' } },
-        { documentNumber: { contains: search, mode: 'insensitive' } },
-        { nationality: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
       ];
     }
 
@@ -60,55 +57,29 @@ export class CustomersService {
   }
 
   async getStats() {
-    const [total, pendingVerifications, highRisk] = await Promise.all([
+    const [total, avgResult] = await Promise.all([
       this.prisma.customer.count(),
-      this.prisma.customer.count({ where: { expiryStatus: 'EXPIRING' } }),
-      this.prisma.customer.count({ where: { riskLevel: 'HIGH' } }),
+      this.prisma.customer.aggregate({ _avg: { level: true } }),
     ]);
-    return { total, pendingVerifications, highRisk };
+    return { total, avgLevel: avgResult._avg.level ?? 3 };
   }
 
-  async verifyIdentity(id: string) {
-    const customer = await this.prisma.customer.findUnique({ where: { id } });
-    if (!customer) throw new NotFoundException('Customer not found');
+  async create(dto: CreateCustomerDto) {
+    if (!dto.name?.trim()) {
+      throw new BadRequestException('Customer name is required');
+    }
 
-    const updated = await this.prisma.customer.update({
-      where: { id },
+    const count = await this.prisma.customer.count();
+    const customerId = `CUST-${String(count + 1001).padStart(4, '0')}`;
+
+    return this.prisma.customer.create({
       data: {
-        expiryStatus: 'VALID',
-        riskLevel: customer.riskLevel === 'HIGH' ? 'MEDIUM' : customer.riskLevel,
+        customerId,
+        name: dto.name.trim(),
+        phone: dto.phone?.trim() || null,
+        email: dto.email?.trim() || null,
+        level: dto.level ?? 3,
       },
-    });
-
-    this.logger.log(`Customer ${customer.customerId} identity verified`);
-    return updated;
-  }
-
-  async flagAccount(id: string, reason?: string) {
-    const customer = await this.prisma.customer.findUnique({ where: { id } });
-    if (!customer) throw new NotFoundException('Customer not found');
-
-    const updated = await this.prisma.customer.update({
-      where: { id },
-      data: {
-        riskLevel: 'HIGH',
-        notes: reason
-          ? `${customer.notes ? customer.notes + '\n' : ''}[FLAGGED] ${reason}`
-          : customer.notes,
-      },
-    });
-
-    this.logger.log(`Customer ${customer.customerId} flagged — risk set to HIGH`);
-    return updated;
-  }
-
-  async updateNotes(id: string, notes: string) {
-    const customer = await this.prisma.customer.findUnique({ where: { id } });
-    if (!customer) throw new NotFoundException('Customer not found');
-
-    return this.prisma.customer.update({
-      where: { id },
-      data: { notes },
     });
   }
 }

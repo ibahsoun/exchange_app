@@ -1,18 +1,18 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   ArrowLeftRight,
   CheckCircle2,
   ChevronDown,
   AlertCircle,
-  TrendingUp,
-  TrendingDown,
-  Minus,
   Activity,
+  User,
+  Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
 import { useRates } from '@/hooks/useRates';
-import { currencyRates as seedRates, dashboardRates as seedDashboard } from '@/data/seed';
+import { transactionsApi, customersApi } from '@/lib/api';
+import { currencyRates as seedRates } from '@/data/seed';
 import type { LiveRate } from '@/stores/rates.store';
 
 // ─── Currency meta ──────────────────────────────────────────
@@ -40,9 +40,6 @@ const CURRENCY_COLORS: Record<string, string> = {
   USDT: 'bg-emerald-500',
 };
 
-const PURPOSES = ['Travel & Tourism', 'Business', 'Education', 'Family Support', 'Medical', 'Other'] as const;
-const FUND_SOURCES = ['Personal Savings', 'Salary/Income', 'Business Revenue', 'Investment Returns', 'Gift/Donation'] as const;
-
 // ─── Helpers ────────────────────────────────────────────────
 function formatRate(n: number): string {
   if (n >= 1000) return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -63,8 +60,7 @@ function generateRef() {
 interface FormErrors {
   amount?: string;
   currencies?: string;
-  fullName?: string;
-  idNumber?: string;
+  customer?: string;
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -80,11 +76,25 @@ export function DashboardPage() {
   const [payDropdownOpen, setPayDropdownOpen] = useState(false);
   const [receiveDropdownOpen, setReceiveDropdownOpen] = useState(false);
 
-  // ─── KYC state ─────────────────────────────────────────
-  const [fullName, setFullName] = useState('');
-  const [idNumber, setIdNumber] = useState('');
-  const [purpose, setPurpose] = useState(PURPOSES[0]);
-  const [fundSource, setFundSource] = useState(FUND_SOURCES[0]);
+  // ─── Customer list & selection ─────────────────────────
+  const [customerList, setCustomerList] = useState<{ id: string; name: string; customerId: string }[]>([]);
+  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const customerSearchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    customersApi.list({ limit: '100' })
+      .then((res) => {
+        const customers = (res.items as { id: string; name: string; customerId: string }[])
+          .map((c) => ({ id: c.id, name: c.name, customerId: c.customerId }));
+        setCustomerList(customers);
+        if (customers.length > 0 && !selectedCustomerId) {
+          setSelectedCustomerId(customers[0].id);
+        }
+      })
+      .catch(console.error);
+  }, []);
 
   // ─── UI state ──────────────────────────────────────────
   const [errors, setErrors] = useState<FormErrors>({});
@@ -95,32 +105,17 @@ export function DashboardPage() {
   const storeRates = useRates();
   const hasLive = storeRates.length > 0;
 
-  /**
-   * Conversion logic:
-   *
-   * All rates in the store are quoted as XXX/USD (how many USD per 1 unit of XXX).
-   * - bid = price we buy the base currency from customer (customer sells)
-   * - ask = price we sell the base currency to customer (customer buys)
-   *
-   * When customer PAYS currency A and RECEIVES currency B:
-   *   1. Convert A → USD using the bid for A (we buy A from customer)
-   *   2. Convert USD → B using the ask for B (we sell B to customer)
-   *
-   * Special case: if A or B is USD, skip that leg.
-   */
   const conversionResult = useMemo(() => {
     const amount = parseFloat(payAmount);
     if (isNaN(amount) || amount <= 0) return null;
     if (payCurrency === receiveCurrency) return { rate: 1, received: amount, spread: 0 };
 
-    // Find rate for a currency vs USD
     const findRate = (code: string): { bid: number; ask: number } | null => {
       if (code === 'USD') return { bid: 1, ask: 1 };
       if (hasLive) {
         const r = storeRates.find((r: LiveRate) => r.base === code && r.quote === 'USD');
         if (r) return { bid: r.bid, ask: r.ask };
       }
-      // Seed fallback
       const seed = seedRates.find((r) => r.currency === code);
       if (seed) return { bid: seed.buyRate, ask: seed.sellRate };
       return null;
@@ -130,13 +125,10 @@ export function DashboardPage() {
     const recvRate = findRate(receiveCurrency);
     if (!payRate || !recvRate) return null;
 
-    // Customer pays A → we buy A at bid → USD amount
     const usdAmount = payCurrency === 'USD' ? amount : amount * payRate.bid;
-    // USD → customer receives B → we sell B at ask → B amount
     const received = receiveCurrency === 'USD' ? usdAmount : usdAmount / recvRate.ask;
 
     const effectiveRate = received / amount;
-    // Spread: difference between mid and effective rate
     const midPay = payCurrency === 'USD' ? 1 : (payRate.bid + payRate.ask) / 2;
     const midRecv = receiveCurrency === 'USD' ? 1 : (recvRate.bid + recvRate.ask) / 2;
     const midRate = midPay / midRecv;
@@ -144,30 +136,6 @@ export function DashboardPage() {
 
     return { rate: effectiveRate, received, spread };
   }, [payAmount, payCurrency, receiveCurrency, storeRates, hasLive]);
-
-  // ─── Sidebar rates from store or seed ──────────────────
-  const sidebarRates = useMemo(() => {
-    const pairs = ['EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD'];
-    if (hasLive) {
-      return pairs.map((code) => {
-        const r = storeRates.find((r: LiveRate) => r.base === code && r.quote === 'USD');
-        return {
-          code,
-          pair: `${code}/USD`,
-          buy: r?.bid ?? 0,
-          sell: r?.ask ?? 0,
-          trend: r?.trend ?? 'stable',
-        };
-      }).filter((r) => r.buy > 0);
-    }
-    return seedDashboard.map((r) => ({
-      code: r.currency,
-      pair: r.pair,
-      buy: r.buy,
-      sell: r.sell,
-      trend: 'stable' as const,
-    }));
-  }, [storeRates, hasLive]);
 
   // ─── Swap currencies ──────────────────────────────────
   const handleSwap = useCallback(() => {
@@ -193,31 +161,37 @@ export function DashboardPage() {
       errs.currencies = 'Select different currencies';
     }
 
-    if (!fullName.trim()) {
-      errs.fullName = 'Customer name is required';
-    } else if (fullName.trim().length < 3) {
-      errs.fullName = 'Enter full name (min 3 characters)';
-    }
-
-    if (!idNumber.trim()) {
-      errs.idNumber = 'ID number is required';
+    if (!selectedCustomerId) {
+      errs.customer = 'Select a customer';
     }
 
     setErrors(errs);
     return Object.keys(errs).length === 0;
-  }, [payAmount, payCurrency, receiveCurrency, fullName, idNumber]);
+  }, [payAmount, payCurrency, receiveCurrency, selectedCustomerId]);
 
   // ─── Submit ───────────────────────────────────────────
-  const handleProcess = useCallback(() => {
+  const handleProcess = useCallback(async () => {
     if (!validate()) return;
-    setSubmitted(true);
-    toast('success', `Transaction ${ref} submitted — ${payCurrency} → ${receiveCurrency}`);
-    setTimeout(() => setSubmitted(false), 2500);
-  }, [validate, toast, ref, payCurrency, receiveCurrency]);
+
+    try {
+      await transactionsApi.create({
+        type: 'BUY',
+        base: payCurrency,
+        quote: receiveCurrency,
+        amountIn: parseFloat(payAmount),
+        customerId: selectedCustomerId,
+      });
+      setSubmitted(true);
+      toast('success', `Transaction ${ref} submitted — ${payCurrency} → ${receiveCurrency}`);
+      setTimeout(() => setSubmitted(false), 2500);
+    } catch (err) {
+      console.error('Transaction failed:', err);
+      toast('error', 'Transaction failed. Check rates and try again.');
+    }
+  }, [validate, toast, ref, payCurrency, receiveCurrency, payAmount, selectedCustomerId]);
 
   // ─── Amount input handler ─────────────────────────────
   const handleAmountChange = (val: string) => {
-    // Allow only numbers and one decimal point
     const cleaned = val.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1');
     setPayAmount(cleaned);
     if (errors.amount) setErrors((e) => ({ ...e, amount: undefined }));
@@ -246,6 +220,98 @@ export function DashboardPage() {
           </div>
 
           <div className="p-5 space-y-5">
+            {/* Customer selector */}
+            <div>
+              <label className="table-header block mb-2">Customer</label>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomerDropdownOpen((v) => !v);
+                    setCustomerSearch('');
+                    setTimeout(() => customerSearchRef.current?.focus(), 0);
+                  }}
+                  className={cn(
+                    'w-full bg-terminal-bg border rounded-lg pl-9 pr-10 py-2.5 text-left outline-none cursor-pointer transition-colors',
+                    errors.customer
+                      ? 'border-status-red focus:border-status-red'
+                      : 'border-terminal-border focus:border-primary',
+                  )}
+                >
+                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted">
+                    <User className="w-4 h-4" />
+                  </div>
+                  <span className={selectedCustomerId ? 'text-text-primary' : 'text-text-muted'}>
+                    {selectedCustomerId
+                      ? (() => { const c = customerList.find((c) => c.id === selectedCustomerId); return c ? `${c.name} (${c.customerId})` : 'Select a customer...'; })()
+                      : 'Select a customer...'}
+                  </span>
+                  <ChevronDown className={cn('absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted transition-transform', customerDropdownOpen && 'rotate-180')} />
+                </button>
+
+                {customerDropdownOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setCustomerDropdownOpen(false)} />
+                    <div className="absolute top-full mt-1 left-0 right-0 z-50 bg-terminal-card border border-terminal-border rounded-lg shadow-terminal-lg overflow-hidden">
+                      <div className="p-2 border-b border-terminal-border">
+                        <div className="relative">
+                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted" />
+                          <input
+                            ref={customerSearchRef}
+                            type="text"
+                            value={customerSearch}
+                            onChange={(e) => setCustomerSearch(e.target.value)}
+                            placeholder="Search customers..."
+                            className="w-full bg-terminal-bg border border-terminal-border rounded-md pl-8 pr-3 py-1.5 text-sm text-text-primary outline-none focus:border-primary placeholder:text-text-muted"
+                          />
+                        </div>
+                      </div>
+                      <div className="max-h-56 overflow-y-auto">
+                        {customerList
+                          .filter((c) => {
+                            if (!customerSearch) return true;
+                            const q = customerSearch.toLowerCase();
+                            return c.name.toLowerCase().includes(q) || c.customerId.toLowerCase().includes(q);
+                          })
+                          .map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedCustomerId(c.id);
+                                setCustomerDropdownOpen(false);
+                                setCustomerSearch('');
+                                if (errors.customer) setErrors((er) => ({ ...er, customer: undefined }));
+                              }}
+                              className={cn(
+                                'w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-terminal-surface transition-colors',
+                                c.id === selectedCustomerId && 'bg-primary/10',
+                              )}
+                            >
+                              <User className="w-4 h-4 text-text-muted flex-shrink-0" />
+                              <span className="text-sm text-text-primary font-medium">{c.name}</span>
+                              <span className="text-xs text-text-muted ml-auto">{c.customerId}</span>
+                            </button>
+                          ))}
+                        {customerList.filter((c) => {
+                          if (!customerSearch) return true;
+                          const q = customerSearch.toLowerCase();
+                          return c.name.toLowerCase().includes(q) || c.customerId.toLowerCase().includes(q);
+                        }).length === 0 && (
+                          <div className="px-4 py-3 text-sm text-text-muted text-center">No customers found</div>
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+              {errors.customer && (
+                <p className="text-status-red text-xs mt-1.5 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" /> {errors.customer}
+                </p>
+              )}
+            </div>
+
             {/* Currency conversion row */}
             <div className="flex items-start gap-3">
               {/* Customer Pays */}
@@ -342,109 +408,6 @@ export function DashboardPage() {
           </div>
         </div>
 
-        {/* ─── KYC & Compliance Card ────────────────────── */}
-        <div className="card">
-          <div className="card-header">
-            <div className="flex items-center gap-2.5">
-              <div className="card-icon">
-                <CheckCircle2 className="w-4 h-4" />
-              </div>
-              <h2 className="font-semibold text-[15px]">KYC & Compliance</h2>
-            </div>
-            <span className="text-text-muted text-xs italic">Required for transactions above $500</span>
-          </div>
-
-          <div className="p-5 space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              {/* Full Name */}
-              <div>
-                <label className="table-header block mb-2">Customer Full Name</label>
-                <input
-                  type="text"
-                  value={fullName}
-                  onChange={(e) => {
-                    setFullName(e.target.value);
-                    if (errors.fullName) setErrors((er) => ({ ...er, fullName: undefined }));
-                  }}
-                  placeholder="e.g. John Doe"
-                  className={cn(
-                    'w-full bg-terminal-bg border rounded-lg px-4 py-2.5 text-text-primary placeholder-text-muted outline-none transition-colors',
-                    errors.fullName
-                      ? 'border-status-red focus:border-status-red'
-                      : 'border-terminal-border focus:border-primary',
-                  )}
-                />
-                {errors.fullName && (
-                  <p className="text-status-red text-xs mt-1.5 flex items-center gap-1">
-                    <AlertCircle className="w-3 h-3" /> {errors.fullName}
-                  </p>
-                )}
-              </div>
-
-              {/* ID Number */}
-              <div>
-                <label className="table-header block mb-2">Identification Number (Passport/ID)</label>
-                <input
-                  type="text"
-                  value={idNumber}
-                  onChange={(e) => {
-                    setIdNumber(e.target.value);
-                    if (errors.idNumber) setErrors((er) => ({ ...er, idNumber: undefined }));
-                  }}
-                  placeholder="e.g. P-88234912"
-                  className={cn(
-                    'w-full bg-terminal-bg border rounded-lg px-4 py-2.5 text-text-primary placeholder-text-muted outline-none transition-colors',
-                    errors.idNumber
-                      ? 'border-status-red focus:border-status-red'
-                      : 'border-terminal-border focus:border-primary',
-                  )}
-                />
-                {errors.idNumber && (
-                  <p className="text-status-red text-xs mt-1.5 flex items-center gap-1">
-                    <AlertCircle className="w-3 h-3" /> {errors.idNumber}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              {/* Purpose */}
-              <div>
-                <label className="table-header block mb-2">Purpose of Transaction</label>
-                <div className="relative">
-                  <select
-                    value={purpose}
-                    onChange={(e) => setPurpose(e.target.value as typeof purpose)}
-                    className="w-full bg-terminal-bg border border-terminal-border rounded-lg px-4 py-2.5 text-text-primary outline-none focus:border-primary appearance-none cursor-pointer transition-colors pr-10"
-                  >
-                    {PURPOSES.map((p) => (
-                      <option key={p} value={p}>{p}</option>
-                    ))}
-                  </select>
-                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted pointer-events-none" />
-                </div>
-              </div>
-
-              {/* Source of Funds */}
-              <div>
-                <label className="table-header block mb-2">Source of Funds</label>
-                <div className="relative">
-                  <select
-                    value={fundSource}
-                    onChange={(e) => setFundSource(e.target.value as typeof fundSource)}
-                    className="w-full bg-terminal-bg border border-terminal-border rounded-lg px-4 py-2.5 text-text-primary outline-none focus:border-primary appearance-none cursor-pointer transition-colors pr-10"
-                  >
-                    {FUND_SOURCES.map((s) => (
-                      <option key={s} value={s}>{s}</option>
-                    ))}
-                  </select>
-                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted pointer-events-none" />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
         {/* ─── Process Transaction Button ────────────────── */}
         <button
           onClick={handleProcess}
@@ -461,91 +424,6 @@ export function DashboardPage() {
         </button>
       </div>
 
-      {/* ═══ Right sidebar — Market Live Rates ════════════ */}
-      <div className="w-[320px] min-w-[320px]">
-        <div className="card sticky top-6">
-          <div className="card-header">
-            <div className="flex items-center gap-2.5">
-              <div className="card-icon">
-                <Activity className="w-4 h-4" />
-              </div>
-              <h2 className="font-semibold text-[15px]">Market Live Rates</h2>
-            </div>
-            <a href="/live-rates" className="text-primary text-xs font-medium hover:underline">
-              Full View
-            </a>
-          </div>
-
-          <div className="p-0">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-terminal-border">
-                  <th className="table-header text-left px-5 py-2.5">Currency</th>
-                  <th className="table-header text-right px-3 py-2.5">Buy</th>
-                  <th className="table-header text-right px-5 py-2.5">Sell</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sidebarRates.map((r) => (
-                  <tr
-                    key={r.code}
-                    className="border-b border-terminal-border/40 hover:bg-terminal-surface/40 transition-colors cursor-pointer"
-                    onClick={() => {
-                      setReceiveCurrency(r.code);
-                      if (payCurrency === r.code) setPayCurrency('USD');
-                    }}
-                  >
-                    <td className="px-5 py-2.5">
-                      <div className="flex items-center gap-2.5">
-                        <div
-                          className={cn(
-                            'w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold',
-                            CURRENCY_COLORS[r.code] ?? 'bg-gray-600',
-                          )}
-                        >
-                          {r.code.slice(0, 2)}
-                        </div>
-                        <div>
-                          <span className="text-sm font-medium text-text-primary">{r.code}</span>
-                          <span className="text-xxs text-text-muted ml-1.5">/{payCurrency}</span>
-                        </div>
-                        {r.trend !== 'stable' && (
-                          r.trend === 'up'
-                            ? <TrendingUp className="w-3 h-3 text-status-green ml-auto" />
-                            : <TrendingDown className="w-3 h-3 text-status-red ml-auto" />
-                        )}
-                        {r.trend === 'stable' && (
-                          <Minus className="w-3 h-3 text-text-muted ml-auto" />
-                        )}
-                      </div>
-                    </td>
-                    <td className="text-right px-3 py-2.5 font-mono text-[12px] text-text-primary">
-                      {formatRate(r.buy)}
-                    </td>
-                    <td className="text-right px-5 py-2.5 font-mono text-[12px] text-text-primary">
-                      {formatRate(r.sell)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Mini bar chart — General Market Trend (24H) */}
-          <div className="px-5 py-4 border-t border-terminal-border">
-            <div className="table-header mb-2">General Market Trend (24H)</div>
-            <div className="h-14 bg-terminal-surface rounded-lg flex items-end justify-around px-2 pb-1 gap-[3px]">
-              {[30, 45, 35, 55, 40, 65, 50, 70, 60, 75, 55, 80, 65, 70, 60, 75, 85, 70, 80, 90].map((h, i) => (
-                <div
-                  key={i}
-                  className="flex-1 bg-primary/50 rounded-t-sm transition-all"
-                  style={{ height: `${h}%` }}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

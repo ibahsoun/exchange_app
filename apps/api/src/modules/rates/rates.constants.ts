@@ -21,6 +21,7 @@ export const SUPPORTED_PAIRS: PairMeta[] = [
   { base: 'USD', quote: 'AUD', label: 'USD/AUD', quoteName: 'Australian Dollar', type: 'fiat' },
   { base: 'USD', quote: 'USDT', label: 'USD/USDT', quoteName: 'Tether Stablecoin', type: 'crypto' },
   { base: 'USD', quote: 'XAU', label: 'XAU/USD', quoteName: 'Spot Gold / Troy Ounce', type: 'commodity' },
+  { base: 'USD', quote: 'LBP', label: 'USD/LBP', quoteName: 'Lebanese Pound', type: 'fiat' },
 ];
 
 /** Troy ounce to grams conversion factor */
@@ -37,3 +38,18 @@ export const WS_BROADCAST_INTERVAL_MS = parseInt(process.env.WS_BROADCAST_MS ?? 
 
 /** Rate provider token for DI */
 export const RATE_PROVIDER = 'RATE_PROVIDER';
+
+/** Multi-source provider tokens */
+export const MULTI_SOURCE_PROVIDERS = 'MULTI_SOURCE_PROVIDERS';
+
+/** Multi-source refresh interval (default 30s) */
+export const MULTI_SOURCE_REFRESH_MS = parseInt(process.env.MULTI_SOURCE_REFRESH_MS ?? '30000', 10);
+
+/** Store rate modes */
+export type StoreRateMode = 'AUTO_AVG' | 'MANUAL_SOURCE' | 'CUSTOM_VALUE' | 'LOCKED';
+
+/** Outlier threshold — remove values deviating more than this % from median */
+export const OUTLIER_THRESHOLD_PCT = 15;
+
+/** Multi-source target currencies (what we fetch from external sources) */
+export const MULTI_SOURCE_QUOTES = ['EUR', 'CNY', 'BRL', 'PYG', 'AED', 'ARS', 'LBP', 'XAU', 'USDT'];

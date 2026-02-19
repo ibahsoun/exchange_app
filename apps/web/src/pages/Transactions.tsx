@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   Search,
   Calendar,
@@ -12,7 +12,8 @@ import {
   Activity,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { transactions as seedTxs } from '@/data/seed';
+import { TableRowSkeleton } from '@/components/Skeleton';
+import { transactionsApi } from '@/lib/api';
 import type { Transaction } from '@exchange/shared';
 
 // ─── Constants ──────────────────────────────────────────────
@@ -67,56 +68,48 @@ export function TransactionsPage() {
   const [dateOpen, setDateOpen] = useState(false);
   const [page, setPage] = useState(1);
 
-  // ─── Data (seed fallback — would fetch from API in production) ──
-  const allTxs: Transaction[] = seedTxs;
+  // ─── API data ─────────────────────────────────────────
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [loading, setLoading] = useState(true);
 
-  // ─── Filtered + paginated ─────────────────────────────
-  const filtered = useMemo(() => {
-    let result = allTxs;
+  const fetchTransactions = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params: Record<string, string> = {
+        page: String(page),
+        limit: String(PAGE_SIZE),
+      };
+      if (search.trim()) params.search = search.trim();
+      if (statusFilter !== 'ALL') params.status = statusFilter;
+      if (dateFrom) params.from = dateFrom;
+      if (dateTo) params.to = dateTo;
 
-    // Search
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      result = result.filter(
-        (tx) =>
-          tx.receiptId.toLowerCase().includes(q) ||
-          tx.customerName.toLowerCase().includes(q) ||
-          `${tx.base}/${tx.quote}`.toLowerCase().includes(q) ||
-          tx.base.toLowerCase().includes(q) ||
-          tx.quote.toLowerCase().includes(q),
-      );
+      const res = await transactionsApi.list(params);
+      setTransactions(res.items as Transaction[]);
+      setTotal(res.total);
+      setTotalPages(Math.max(1, res.totalPages));
+    } catch (err) {
+      console.error('Failed to fetch transactions:', err);
+    } finally {
+      setLoading(false);
     }
+  }, [page, search, statusFilter, dateFrom, dateTo]);
 
-    // Status
-    if (statusFilter !== 'ALL') {
-      result = result.filter((tx) => tx.status === statusFilter);
-    }
+  useEffect(() => { fetchTransactions(); }, [fetchTransactions]);
 
-    // Date range
-    if (dateFrom) {
-      const from = new Date(dateFrom);
-      result = result.filter((tx) => new Date(tx.createdAt) >= from);
-    }
-    if (dateTo) {
-      const to = new Date(dateTo + 'T23:59:59Z');
-      result = result.filter((tx) => new Date(tx.createdAt) <= to);
-    }
-
-    return result;
-  }, [allTxs, search, statusFilter, dateFrom, dateTo]);
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
-  const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const paginated = transactions;
 
   // Reset page when filters change
   const setSearchAndReset = useCallback((v: string) => { setSearch(v); setPage(1); }, []);
   const setStatusAndReset = useCallback((v: string) => { setStatusFilter(v); setPage(1); }, []);
 
-  // ─── Stats ────────────────────────────────────────────
-  const completedCount = allTxs.filter((t) => t.status === 'COMPLETED').length;
-  const pendingCount = allTxs.filter((t) => t.status === 'PENDING').length;
-  const totalVolume = allTxs.reduce((s, t) => s + t.amountIn, 0);
+  // ─── Stats (from current page — quick approximation) ──
+  const completedCount = transactions.filter((t) => t.status === 'COMPLETED').length;
+  const pendingCount = transactions.filter((t) => t.status === 'PENDING').length;
+  const totalVolume = transactions.reduce((s, t) => s + t.amountIn, 0);
 
   // ─── Pagination helpers ───────────────────────────────
   const pageNums = useMemo(() => {
@@ -143,7 +136,7 @@ export function TransactionsPage() {
             <span className="badge badge-green text-xxs animate-pulse-slow">LIVE FEED</span>
           </div>
           <p className="text-text-muted text-sm mt-0.5">
-            {filtered.length} transaction{filtered.length !== 1 ? 's' : ''} found
+            {total} transaction{total !== 1 ? 's' : ''} found
           </p>
         </div>
 
@@ -292,7 +285,11 @@ export function TransactionsPage() {
               </tr>
             </thead>
             <tbody>
-              {paginated.length === 0 ? (
+              {loading ? (
+                Array.from({ length: 5 }).map((_, i) => (
+                  <TableRowSkeleton key={i} cols={9} />
+                ))
+              ) : paginated.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="px-5 py-12 text-center text-text-muted">
                     No transactions match your filters.
@@ -380,9 +377,9 @@ export function TransactionsPage() {
           <span className="text-sm text-text-muted">
             Showing{' '}
             <strong className="text-text-primary">
-              {filtered.length === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filtered.length)}
+              {total === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, total)}
             </strong>{' '}
-            of <strong className="text-text-primary">{filtered.length}</strong> transactions
+            of <strong className="text-text-primary">{total}</strong> transactions
           </span>
 
           <div className="flex items-center gap-1">

@@ -1,30 +1,22 @@
-import { useState, useMemo, useCallback, memo } from 'react';
+import { useState, useCallback, useEffect, memo } from 'react';
 import {
   Search,
-  ChevronDown,
   Download,
   UserPlus,
   X,
-  Flag,
-  ShieldCheck,
   Users,
-  AlertTriangle,
-  ShieldAlert,
-  FileText,
-  DollarSign,
-  ArrowLeftRight,
-  Clock,
-  Save,
+  Star,
+  Phone,
+  Mail,
+  AlertCircle,
 } from 'lucide-react';
 import { cn, getInitials } from '@/lib/utils';
+import { TableRowSkeleton } from '@/components/Skeleton';
 import { useToast } from '@/components/Toast';
-import { customers as seedCustomers } from '@/data/seed';
+import { customersApi } from '@/lib/api';
 import type { Customer } from '@exchange/shared';
 
 // ─── Constants ──────────────────────────────────────────────
-const RISK_LEVELS = ['ALL', 'LOW', 'MEDIUM', 'HIGH'] as const;
-const EXPIRY_STATUSES = ['ALL', 'VALID', 'EXPIRING', 'EXPIRED'] as const;
-
 const AVATAR_COLORS = [
   'bg-teal-700', 'bg-slate-600', 'bg-blue-700', 'bg-rose-700',
   'bg-indigo-600', 'bg-amber-700', 'bg-emerald-700', 'bg-purple-700',
@@ -38,10 +30,18 @@ function hashColor(name: string) {
   return AVATAR_COLORS[h];
 }
 
-function daysUntilExpiry(dateStr: string): number {
-  const d = new Date(dateStr);
-  const now = new Date();
-  return Math.ceil((d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+function StarRating({ level, size = 'sm' }: { level: number; size?: 'sm' | 'lg' }) {
+  const px = size === 'lg' ? 'w-5 h-5' : 'w-3.5 h-3.5';
+  return (
+    <div className="flex items-center gap-0.5">
+      {[1, 2, 3, 4, 5].map((i) => (
+        <Star
+          key={i}
+          className={cn(px, i <= level ? 'text-amber-400 fill-amber-400' : 'text-terminal-border')}
+        />
+      ))}
+    </div>
+  );
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -51,106 +51,85 @@ export function CustomersPage() {
   const toast = useToast();
 
   // ─── Data state ────────────────────────────────────────
-  const [customers, setCustomers] = useState<Customer[]>(seedCustomers);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [loading, setLoading] = useState(true);
 
   // ─── Filter state ──────────────────────────────────────
   const [search, setSearch] = useState('');
-  const [riskFilter, setRiskFilter] = useState<string>('ALL');
-  const [riskOpen, setRiskOpen] = useState(false);
-  const [expiryFilter, setExpiryFilter] = useState<string>('ALL');
-  const [expiryOpen, setExpiryOpen] = useState(false);
 
   // ─── Drawer state ─────────────────────────────────────
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [drawerNotes, setDrawerNotes] = useState('');
-  const [notesSaved, setNotesSaved] = useState(false);
-  const [flagConfirm, setFlagConfirm] = useState(false);
-  const [verifyConfirm, setVerifyConfirm] = useState(false);
 
-  // ─── Derived data ──────────────────────────────────────
-  const filtered = useMemo(() => {
-    let result = customers;
+  // ─── Stats from API ──────────────────────────────────
+  const [stats, setStats] = useState({ total: 0, avgLevel: 3 });
 
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      result = result.filter(
-        (c) =>
-          c.fullName.toLowerCase().includes(q) ||
-          c.customerId.toLowerCase().includes(q) ||
-          c.documentNumber.toLowerCase().includes(q) ||
-          c.nationality.toLowerCase().includes(q),
-      );
+  // ─── Add Customer modal state ─────────────────────────
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addForm, setAddForm] = useState({ name: '', phone: '', email: '', level: 3 });
+  const [addErrors, setAddErrors] = useState<Record<string, string>>({});
+  const [addSubmitting, setAddSubmitting] = useState(false);
+
+  // ─── Fetch customers ─────────────────────────────────
+  const fetchCustomers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params: Record<string, string> = {};
+      if (search.trim()) params.search = search.trim();
+
+      const res = await customersApi.list(params);
+      const items = (res.items as Record<string, unknown>[]).map((c) => ({
+        ...c,
+        createdAt: String(c.createdAt),
+        updatedAt: String(c.updatedAt),
+      })) as Customer[];
+      setCustomers(items);
+    } catch (err) {
+      console.error('Failed to fetch customers:', err);
+    } finally {
+      setLoading(false);
     }
+  }, [search]);
 
-    if (riskFilter !== 'ALL') {
-      result = result.filter((c) => c.riskLevel === riskFilter);
-    }
+  useEffect(() => { fetchCustomers(); }, [fetchCustomers]);
 
-    if (expiryFilter !== 'ALL') {
-      result = result.filter((c) => c.expiryStatus === expiryFilter);
-    }
-
-    return result;
-  }, [customers, search, riskFilter, expiryFilter]);
-
-  const selected = customers.find((c) => c.id === selectedId) ?? null;
-
-  // ─── Stats ────────────────────────────────────────────
-  const totalCustomers = customers.length;
-  const pendingVerifications = customers.filter((c) => c.expiryStatus === 'EXPIRING' || c.expiryStatus === 'EXPIRED').length;
-  const highRisk = customers.filter((c) => c.riskLevel === 'HIGH').length;
-
-  // ─── Select customer ──────────────────────────────────
-  const selectCustomer = useCallback((c: Customer) => {
-    setSelectedId(c.id);
-    setDrawerNotes(c.notes ?? '');
-    setNotesSaved(false);
-    setFlagConfirm(false);
-    setVerifyConfirm(false);
+  const refreshStats = useCallback(() => {
+    customersApi.getStats().then(setStats).catch(console.error);
   }, []);
 
-  // ─── Actions ──────────────────────────────────────────
-  const handleVerify = useCallback(() => {
-    if (!selected) return;
-    setCustomers((prev) =>
-      prev.map((c) =>
-        c.id === selected.id
-          ? { ...c, expiryStatus: 'VALID' as const, riskLevel: c.riskLevel === 'HIGH' ? 'MEDIUM' as const : c.riskLevel }
-          : c,
-      ),
-    );
-    toast('success', `${selected.fullName} identity verified`);
-    setVerifyConfirm(true);
-    setTimeout(() => setVerifyConfirm(false), 2000);
-  }, [selected, toast]);
+  useEffect(() => { refreshStats(); }, [refreshStats]);
 
-  const handleFlag = useCallback(() => {
-    if (!selected) return;
-    setCustomers((prev) =>
-      prev.map((c) =>
-        c.id === selected.id
-          ? { ...c, riskLevel: 'HIGH' as const }
-          : c,
-      ),
-    );
-    toast('warning', `${selected.fullName} flagged as HIGH risk`);
-    setFlagConfirm(true);
-    setTimeout(() => setFlagConfirm(false), 2000);
-  }, [selected, toast]);
+  // ─── Add customer handler ──────────────────────────────
+  const handleAddCustomer = useCallback(async () => {
+    const errs: Record<string, string> = {};
+    if (!addForm.name.trim()) errs.name = 'Name is required';
+    if (addForm.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addForm.email)) errs.email = 'Invalid email';
+    setAddErrors(errs);
+    if (Object.keys(errs).length > 0) return;
 
-  const handleSaveNotes = useCallback(() => {
-    if (!selected) return;
-    setCustomers((prev) =>
-      prev.map((c) =>
-        c.id === selected.id
-          ? { ...c, notes: drawerNotes || null }
-          : c,
-      ),
-    );
-    toast('info', 'Compliance notes saved');
-    setNotesSaved(true);
-    setTimeout(() => setNotesSaved(false), 1500);
-  }, [selected, drawerNotes, toast]);
+    setAddSubmitting(true);
+    try {
+      await customersApi.create({
+        name: addForm.name.trim(),
+        phone: addForm.phone.trim() || undefined,
+        email: addForm.email.trim() || undefined,
+        level: addForm.level,
+      });
+      toast('success', `Customer "${addForm.name.trim()}" added successfully`);
+      setShowAddModal(false);
+      setAddForm({ name: '', phone: '', email: '', level: 3 });
+      setAddErrors({});
+      fetchCustomers();
+      refreshStats();
+    } catch (err) {
+      console.error('Failed to create customer:', err);
+      toast('error', 'Failed to create customer');
+    } finally {
+      setAddSubmitting(false);
+    }
+  }, [addForm, toast, fetchCustomers, refreshStats]);
+
+  // ─── Derived data ──────────────────────────────────────
+  const selected = customers.find((c) => c.id === selectedId) ?? null;
 
   return (
     <div className="flex gap-0 h-full -m-6">
@@ -165,34 +144,29 @@ export function CustomersPage() {
                 <span className="w-2 h-2 rounded-full bg-status-green animate-pulse-slow" /> Live Database
               </span>
             </div>
-            <p className="text-text-muted text-sm mt-0.5">{filtered.length} customer{filtered.length !== 1 ? 's' : ''} found</p>
+            <p className="text-text-muted text-sm mt-0.5">{customers.length} customer{customers.length !== 1 ? 's' : ''} found</p>
           </div>
-          <button className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5">
+          <button
+            onClick={() => { setShowAddModal(true); setAddForm({ name: '', phone: '', email: '', level: 3 }); setAddErrors({}); }}
+            className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5"
+          >
             <UserPlus className="w-3.5 h-3.5" /> Add New Customer
           </button>
         </div>
 
         {/* KPI cards */}
-        <div className="grid grid-cols-3 gap-4 mb-5">
+        <div className="grid grid-cols-2 gap-4 mb-5">
           <KpiCard
             icon={<Users className="w-4 h-4" />}
             label="Total Customers"
-            value={totalCustomers.toLocaleString()}
-            sub={<span className="text-status-green">+12% this month</span>}
+            value={stats.total.toLocaleString()}
+            sub={<span className="text-text-muted">Active in system</span>}
           />
           <KpiCard
-            icon={<AlertTriangle className="w-4 h-4" />}
-            label="Pending Verifications"
-            value={pendingVerifications.toString()}
-            valueColor={pendingVerifications > 0 ? 'text-status-yellow' : undefined}
-            sub={<span className="text-status-yellow">Requires review</span>}
-          />
-          <KpiCard
-            icon={<ShieldAlert className="w-4 h-4" />}
-            label="High Risk Flagged"
-            value={highRisk.toString()}
-            valueColor={highRisk > 0 ? 'text-status-red' : undefined}
-            sub={<span className="text-text-muted">Enhanced monitoring</span>}
+            icon={<Star className="w-4 h-4" />}
+            label="Average Level"
+            value={stats.avgLevel.toFixed(1)}
+            sub={<StarRating level={Math.round(stats.avgLevel)} />}
           />
         </div>
 
@@ -204,40 +178,11 @@ export function CustomersPage() {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search by Name, ID, Document, or Nationality..."
+              placeholder="Search by name, ID, phone, or email..."
               aria-label="Search customers"
               className="bg-transparent text-sm text-text-primary outline-none flex-1 placeholder-text-muted"
             />
           </div>
-
-          {/* Risk Level dropdown */}
-          <FilterDropdown
-            label={riskFilter === 'ALL' ? 'Risk Level' : `${riskFilter} Risk`}
-            open={riskOpen}
-            setOpen={setRiskOpen}
-            options={RISK_LEVELS}
-            value={riskFilter}
-            onChange={setRiskFilter}
-            renderOption={(opt) => (
-              <div className="flex items-center gap-2">
-                {opt !== 'ALL' && <RiskDot level={opt} />}
-                <span>{opt === 'ALL' ? 'All Risk Levels' : `${opt} Risk`}</span>
-              </div>
-            )}
-          />
-
-          {/* Expiry Status dropdown */}
-          <FilterDropdown
-            label={expiryFilter === 'ALL' ? 'Expiry Status' : expiryFilter}
-            open={expiryOpen}
-            setOpen={setExpiryOpen}
-            options={EXPIRY_STATUSES}
-            value={expiryFilter}
-            onChange={setExpiryFilter}
-            renderOption={(opt) => (
-              <span>{opt === 'ALL' ? 'All Statuses' : opt}</span>
-            )}
-          />
 
           <button className="btn-outline text-xs py-2 px-3 flex items-center gap-1.5 ml-auto">
             <Download className="w-3.5 h-3.5" /> Export
@@ -251,29 +196,31 @@ export function CustomersPage() {
               <thead>
                 <tr className="border-b border-terminal-border">
                   <th className="table-header text-left px-5 py-2.5">Customer</th>
-                  <th className="table-header text-left px-4 py-2.5">Nationality</th>
-                  <th className="table-header text-left px-4 py-2.5">Document</th>
-                  <th className="table-header text-center px-4 py-2.5">Risk</th>
-                  <th className="table-header text-center px-4 py-2.5">Expiry</th>
-                  <th className="table-header text-right px-5 py-2.5">Volume</th>
+                  <th className="table-header text-left px-4 py-2.5">Phone</th>
+                  <th className="table-header text-left px-4 py-2.5">Email</th>
+                  <th className="table-header text-center px-4 py-2.5">Level</th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.length === 0 ? (
+                {loading ? (
+                  Array.from({ length: 5 }).map((_, i) => (
+                    <TableRowSkeleton key={i} cols={4} />
+                  ))
+                ) : customers.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-5 py-12 text-center text-text-muted">
-                      No customers match your filters.
+                    <td colSpan={4} className="px-5 py-12 text-center text-text-muted">
+                      No customers match your search.
                     </td>
                   </tr>
                 ) : (
-                  filtered.map((c) => (
+                  customers.map((c) => (
                     <tr
                       key={c.id}
-                      onClick={() => selectCustomer(c)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectCustomer(c); } }}
+                      onClick={() => setSelectedId(c.id)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedId(c.id); } }}
                       tabIndex={0}
                       role="button"
-                      aria-label={`View ${c.fullName}`}
+                      aria-label={`View ${c.name}`}
                       className={cn(
                         'border-b border-terminal-border/40 cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-primary/50',
                         selectedId === c.id
@@ -285,29 +232,26 @@ export function CustomersPage() {
                         <div className="flex items-center gap-2.5">
                           <div className={cn(
                             'w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0',
-                            hashColor(c.fullName),
+                            hashColor(c.name),
                           )}>
-                            {getInitials(c.fullName)}
+                            {getInitials(c.name)}
                           </div>
                           <div className="min-w-0">
-                            <div className="text-sm font-medium text-text-primary truncate">{c.fullName}</div>
+                            <div className="text-sm font-medium text-text-primary truncate">{c.name}</div>
                             <div className="text-xxs text-text-muted">#{c.customerId}</div>
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-sm text-text-secondary">{c.nationality}</td>
+                      <td className="px-4 py-3 text-sm text-text-secondary">
+                        {c.phone ?? <span className="text-text-muted">—</span>}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-text-secondary">
+                        {c.email ?? <span className="text-text-muted">—</span>}
+                      </td>
                       <td className="px-4 py-3">
-                        <div className="text-sm text-text-secondary">{c.documentType}</div>
-                        <div className="text-xxs text-text-muted font-mono">{c.documentNumber}</div>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <RiskBadge level={c.riskLevel} />
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <ExpiryBadge status={c.expiryStatus} />
-                      </td>
-                      <td className="px-5 py-3 text-right text-sm font-mono text-text-secondary">
-                        ${c.lifetimeVolume.toLocaleString()}
+                        <div className="flex justify-center">
+                          <StarRating level={c.level} />
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -319,15 +263,126 @@ export function CustomersPage() {
           {/* Footer */}
           <div className="flex items-center justify-between px-5 py-3 border-t border-terminal-border">
             <span className="text-xs text-text-muted">
-              Showing <strong className="text-text-primary">{filtered.length}</strong> of <strong className="text-text-primary">{customers.length}</strong> customers
+              Showing <strong className="text-text-primary">{customers.length}</strong> customer{customers.length !== 1 ? 's' : ''}
             </span>
           </div>
         </div>
       </div>
 
+      {/* ═══ Add Customer Modal ═══════════════════════════ */}
+      {showAddModal && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/50" onClick={() => setShowAddModal(false)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+            <div className="bg-terminal-card border border-terminal-border rounded-xl shadow-terminal-lg w-full max-w-md pointer-events-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-terminal-border">
+                <h2 className="font-semibold text-[15px]">Add New Customer</h2>
+                <button onClick={() => setShowAddModal(false)} className="text-text-muted hover:text-text-primary transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                {/* Name */}
+                <div>
+                  <label className="table-header block mb-1.5">Full Name *</label>
+                  <input
+                    type="text"
+                    value={addForm.name}
+                    onChange={(e) => { setAddForm((f) => ({ ...f, name: e.target.value })); setAddErrors((er) => ({ ...er, name: '' })); }}
+                    placeholder="e.g. John Doe"
+                    className={cn(
+                      'w-full bg-terminal-bg border rounded-lg px-3 py-2.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted',
+                      addErrors.name ? 'border-status-red' : 'border-terminal-border focus:border-primary',
+                    )}
+                  />
+                  {addErrors.name && (
+                    <p className="text-status-red text-xs mt-1 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" /> {addErrors.name}
+                    </p>
+                  )}
+                </div>
+
+                {/* Phone */}
+                <div>
+                  <label className="table-header block mb-1.5">Phone</label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                    <input
+                      type="tel"
+                      value={addForm.phone}
+                      onChange={(e) => setAddForm((f) => ({ ...f, phone: e.target.value }))}
+                      placeholder="+1 555 123 4567"
+                      className="w-full bg-terminal-bg border border-terminal-border rounded-lg pl-9 pr-3 py-2.5 text-sm text-text-primary outline-none focus:border-primary transition-colors placeholder:text-text-muted"
+                    />
+                  </div>
+                </div>
+
+                {/* Email */}
+                <div>
+                  <label className="table-header block mb-1.5">Email</label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                    <input
+                      type="email"
+                      value={addForm.email}
+                      onChange={(e) => { setAddForm((f) => ({ ...f, email: e.target.value })); setAddErrors((er) => ({ ...er, email: '' })); }}
+                      placeholder="john@example.com"
+                      className={cn(
+                        'w-full bg-terminal-bg border rounded-lg pl-9 pr-3 py-2.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted',
+                        addErrors.email ? 'border-status-red' : 'border-terminal-border focus:border-primary',
+                      )}
+                    />
+                  </div>
+                  {addErrors.email && (
+                    <p className="text-status-red text-xs mt-1 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" /> {addErrors.email}
+                    </p>
+                  )}
+                </div>
+
+                {/* Level */}
+                <div>
+                  <label className="table-header block mb-1.5">Level</label>
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5].map((i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setAddForm((f) => ({ ...f, level: i }))}
+                        className="p-0.5 transition-transform hover:scale-110"
+                      >
+                        <Star className={cn('w-6 h-6', i <= addForm.level ? 'text-amber-400 fill-amber-400' : 'text-terminal-border')} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 p-5 border-t border-terminal-border">
+                <button
+                  onClick={() => setShowAddModal(false)}
+                  className="btn-outline text-xs py-2 px-4"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleAddCustomer}
+                  disabled={addSubmitting}
+                  className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  {addSubmitting ? 'Adding...' : 'Add Customer'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* ═══ Detail drawer ═══════════════════════════════ */}
       {selected && (
-        <div className="w-[400px] min-w-[400px] bg-terminal-card border-l border-terminal-border h-full overflow-y-auto animate-slide-in-right" role="complementary" aria-label="Customer details">
+        <div className="w-[380px] min-w-[380px] bg-terminal-card border-l border-terminal-border h-full overflow-y-auto animate-slide-in-right" role="complementary" aria-label="Customer details">
           <div className="p-6 space-y-6">
             {/* Close */}
             <div className="flex items-center justify-between">
@@ -345,147 +400,50 @@ export function CustomersPage() {
             <div className="flex flex-col items-center text-center">
               <div className={cn(
                 'w-20 h-20 rounded-full flex items-center justify-center text-white text-2xl font-bold mb-3',
-                hashColor(selected.fullName),
+                hashColor(selected.name),
               )}>
-                {getInitials(selected.fullName)}
+                {getInitials(selected.name)}
               </div>
-              <h3 className="text-lg font-bold">{selected.fullName}</h3>
+              <h3 className="text-lg font-bold">{selected.name}</h3>
               <div className="text-xs text-text-muted mt-0.5">
-                #{selected.customerId} &bull; {selected.nationality} &bull; Active since {new Date(selected.activeSince).getFullYear()}
+                #{selected.customerId}
               </div>
-              <div className="flex items-center gap-2 mt-2">
-                <RiskBadge level={selected.riskLevel} />
-                {selected.expiryStatus !== 'VALID' && (
-                  <ExpiryBadge status={selected.expiryStatus} />
-                )}
+              <div className="mt-2">
+                <StarRating level={selected.level} size="lg" />
               </div>
             </div>
 
-            {/* KYC Documents */}
+            {/* Contact Info */}
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <span className="table-header">KYC Documents</span>
-                <button className="text-primary text-xs font-medium hover:underline">Update</button>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="bg-terminal-surface border border-terminal-border rounded-lg p-3 h-20 flex flex-col justify-between">
-                  <FileText className="w-5 h-5 text-text-muted" />
-                  <div>
-                    <div className="text-xxs text-text-muted">{selected.documentType}</div>
-                    <div className="text-xxs text-text-primary font-mono">{selected.documentNumber}</div>
+              <span className="table-header block mb-3">Contact Information</span>
+              <div className="space-y-2">
+                <div className="flex items-center gap-3 bg-terminal-surface rounded-lg px-4 py-3">
+                  <Phone className="w-4 h-4 text-primary flex-shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-xxs text-text-muted">Phone</div>
+                    <div className="text-sm text-text-primary font-mono">
+                      {selected.phone ?? <span className="text-text-muted italic">Not provided</span>}
+                    </div>
                   </div>
                 </div>
-                <div className="bg-terminal-surface border border-terminal-border rounded-lg p-3 h-20 flex flex-col justify-between">
-                  <FileText className="w-5 h-5 text-text-muted" />
-                  <div>
-                    <div className="text-xxs text-text-muted">Expiry Date</div>
-                    <div className={cn(
-                      'text-xxs font-mono font-semibold',
-                      selected.expiryStatus === 'VALID' ? 'text-status-green'
-                        : selected.expiryStatus === 'EXPIRING' ? 'text-status-yellow'
-                          : 'text-status-red',
-                    )}>
-                      {selected.documentExpiry}
+                <div className="flex items-center gap-3 bg-terminal-surface rounded-lg px-4 py-3">
+                  <Mail className="w-4 h-4 text-primary flex-shrink-0" />
+                  <div className="min-w-0">
+                    <div className="text-xxs text-text-muted">Email</div>
+                    <div className="text-sm text-text-primary">
+                      {selected.email ?? <span className="text-text-muted italic">Not provided</span>}
                     </div>
                   </div>
                 </div>
               </div>
-
-              {/* Warning callout */}
-              {selected.expiryStatus === 'EXPIRING' && (
-                <div className="mt-3 bg-status-yellow-subtle border border-status-yellow/20 rounded-lg p-3 text-xs text-status-yellow flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>Document expiring in {daysUntilExpiry(selected.documentExpiry)} days. Renewal required for high-value transactions.</span>
-                </div>
-              )}
-              {selected.expiryStatus === 'EXPIRED' && (
-                <div className="mt-3 bg-status-red-subtle border border-status-red/20 rounded-lg p-3 text-xs text-status-red flex items-start gap-2">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>Document expired {Math.abs(daysUntilExpiry(selected.documentExpiry))} days ago. Customer is blocked from transactions until renewed.</span>
-                </div>
-              )}
-              {selected.riskLevel === 'HIGH' && (
-                <div className="mt-3 bg-status-red-subtle border border-status-red/20 rounded-lg p-3 text-xs text-status-red flex items-start gap-2">
-                  <ShieldAlert className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>HIGH RISK — Account flagged for enhanced due diligence. All transactions require supervisor approval.</span>
-                </div>
-              )}
             </div>
 
-            {/* Financial Snapshot */}
-            <div>
-              <span className="table-header block mb-3">Financial Snapshot</span>
-              <div className="space-y-2">
-                <SnapshotRow
-                  icon={<DollarSign className="w-3.5 h-3.5 text-primary" />}
-                  label="Lifetime Volume"
-                  value={`$${selected.lifetimeVolume.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
-                />
-                <SnapshotRow
-                  icon={<Clock className="w-3.5 h-3.5 text-primary" />}
-                  label="Last Transaction"
-                  value={selected.lastTransaction ?? 'N/A'}
-                />
-                <SnapshotRow
-                  icon={<ArrowLeftRight className="w-3.5 h-3.5 text-primary" />}
-                  label="Preferred Pair"
-                  value={selected.preferredPair ?? 'N/A'}
-                />
+            {/* Member Since */}
+            <div className="bg-terminal-surface rounded-lg px-4 py-3">
+              <div className="text-xxs text-text-muted mb-0.5">Member Since</div>
+              <div className="text-sm text-text-primary">
+                {new Date(selected.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
               </div>
-            </div>
-
-            {/* Compliance Notes */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <span className="table-header">Compliance Notes</span>
-                {notesSaved && <span className="text-xxs text-status-green">Saved!</span>}
-              </div>
-              <textarea
-                value={drawerNotes}
-                onChange={(e) => { setDrawerNotes(e.target.value); setNotesSaved(false); }}
-                placeholder="Add a private note regarding this customer..."
-                className="w-full bg-terminal-surface border border-terminal-border rounded-lg px-4 py-3 text-sm text-text-primary placeholder-text-muted outline-none focus:border-primary resize-none h-24 transition-colors"
-              />
-              <button
-                onClick={handleSaveNotes}
-                className="mt-2 text-xs text-primary hover:underline flex items-center gap-1"
-              >
-                <Save className="w-3 h-3" /> Save Notes
-              </button>
-            </div>
-
-            {/* Action buttons */}
-            <div className="flex gap-3">
-              <button
-                onClick={handleFlag}
-                disabled={selected.riskLevel === 'HIGH'}
-                className={cn(
-                  'flex-1 text-sm py-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-all font-medium',
-                  flagConfirm
-                    ? 'bg-status-red text-white cursor-default'
-                    : selected.riskLevel === 'HIGH'
-                      ? 'border border-terminal-border text-text-muted cursor-not-allowed'
-                      : 'border border-status-red/30 text-status-red hover:bg-status-red/10',
-                )}
-              >
-                <Flag className="w-4 h-4" />
-                {flagConfirm ? 'Flagged!' : selected.riskLevel === 'HIGH' ? 'Already Flagged' : 'Flag Account'}
-              </button>
-              <button
-                onClick={handleVerify}
-                disabled={selected.expiryStatus === 'VALID' && selected.riskLevel !== 'HIGH'}
-                className={cn(
-                  'flex-1 text-sm py-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-all font-medium',
-                  verifyConfirm
-                    ? 'bg-status-green text-white cursor-default'
-                    : selected.expiryStatus === 'VALID' && selected.riskLevel !== 'HIGH'
-                      ? 'bg-terminal-surface text-text-muted cursor-not-allowed'
-                      : 'bg-primary hover:bg-primary-hover text-white',
-                )}
-              >
-                <ShieldCheck className="w-4 h-4" />
-                {verifyConfirm ? 'Verified!' : 'Verify Identity'}
-              </button>
             </div>
           </div>
         </div>
@@ -500,13 +458,11 @@ const KpiCard = memo(function KpiCard({
   icon,
   label,
   value,
-  valueColor,
   sub,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
-  valueColor?: string;
   sub: React.ReactNode;
 }) {
   return (
@@ -517,98 +473,8 @@ const KpiCard = memo(function KpiCard({
         </div>
         <span className="table-header">{label}</span>
       </div>
-      <div className={cn('text-2xl font-bold', valueColor)}>{value}</div>
+      <div className="text-2xl font-bold">{value}</div>
       <div className="text-xs mt-1">{sub}</div>
     </div>
   );
 });
-
-function SnapshotRow({
-  icon,
-  label,
-  value,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="flex items-center justify-between bg-terminal-surface rounded-lg px-4 py-3">
-      <div className="flex items-center gap-2">
-        {icon}
-        <span className="text-sm text-text-secondary">{label}</span>
-      </div>
-      <span className="text-sm font-bold font-mono">{value}</span>
-    </div>
-  );
-}
-
-function RiskDot({ level }: { level: string }) {
-  const colors: Record<string, string> = {
-    LOW: 'bg-status-green', MEDIUM: 'bg-status-yellow', HIGH: 'bg-status-red',
-  };
-  return <span className={cn('w-2 h-2 rounded-full inline-block', colors[level] ?? 'bg-text-muted')} />;
-}
-
-function RiskBadge({ level }: { level: string }) {
-  const map: Record<string, string> = {
-    LOW: 'badge-green', MEDIUM: 'badge-yellow', HIGH: 'badge-red',
-  };
-  return <span className={cn('badge text-xxs', map[level])}>{level}</span>;
-}
-
-function ExpiryBadge({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    VALID: 'badge-green', EXPIRING: 'badge-yellow', EXPIRED: 'badge-red',
-  };
-  return <span className={cn('badge text-xxs', map[status])}>{status}</span>;
-}
-
-function FilterDropdown({
-  label,
-  open,
-  setOpen,
-  options,
-  value,
-  onChange,
-  renderOption,
-}: {
-  label: string;
-  open: boolean;
-  setOpen: (v: boolean) => void;
-  options: readonly string[];
-  value: string;
-  onChange: (v: string) => void;
-  renderOption: (opt: string) => React.ReactNode;
-}) {
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className="btn-outline text-xs py-2 px-3 flex items-center gap-1.5"
-      >
-        {label}
-        <ChevronDown className={cn('w-3 h-3 transition-transform', open && 'rotate-180')} />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute top-full mt-1 right-0 z-50 bg-terminal-card border border-terminal-border rounded-lg shadow-terminal-lg overflow-hidden w-44">
-            {options.map((opt) => (
-              <button
-                key={opt}
-                onClick={() => { onChange(opt); setOpen(false); }}
-                className={cn(
-                  'w-full flex items-center gap-2 px-4 py-2.5 text-xs text-left hover:bg-terminal-surface transition-colors',
-                  value === opt && 'bg-primary/10 text-primary',
-                )}
-              >
-                {renderOption(opt)}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}

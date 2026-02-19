@@ -2,13 +2,6 @@
 export type { Customer, CreateCustomerInput } from './schemas/customer.schema';
 export type { Transaction, CreateTransactionInput } from './schemas/transaction.schema';
 export type { CurrencyRate, MarketSummary } from './schemas/rate.schema';
-export type {
-  VaultCurrency,
-  VaultDenomination,
-  VaultAdjustment,
-  VaultSummary,
-} from './schemas/vault.schema';
-
 // ─── Zod Schemas ─────────────────────────────────────────────────────────
 export {
   CustomerSchema,
@@ -30,13 +23,3 @@ export {
   TrendDirection,
 } from './schemas/rate.schema';
 
-export {
-  VaultDenominationSchema,
-  VaultCurrencySchema,
-  VaultAdjustmentSchema,
-  VaultSummarySchema,
-  DenominationLevel,
-  AlertLevel,
-  AdjustmentType,
-  AdjustmentStatus,
-} from './schemas/vault.schema';

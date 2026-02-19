@@ -8,10 +8,6 @@ export interface CreateTransactionDto {
   quote: string;
   amountIn: number;
   customerId: string;
-  kycName?: string;
-  kycDocId?: string;
-  kycPurpose?: string;
-  kycSource?: string;
 }
 
 export interface TransactionFilters {
@@ -55,7 +51,7 @@ export class TransactionsService {
     if (search) {
       where.OR = [
         { receiptId: { contains: search, mode: 'insensitive' } },
-        { customer: { fullName: { contains: search, mode: 'insensitive' } } },
+        { customer: { name: { contains: search, mode: 'insensitive' } } },
         { base: { contains: search, mode: 'insensitive' } },
         { quote: { contains: search, mode: 'insensitive' } },
       ];
@@ -69,15 +65,35 @@ export class TransactionsService {
         orderBy: { createdAt: 'desc' },
         include: {
           customer: {
-            select: { fullName: true, customerId: true },
+            select: { name: true, customerId: true },
           },
         },
       }),
       this.prisma.transaction.count({ where }),
     ]);
 
+    // Flatten customer data to match the shared Transaction type
+    const mapped = items.map((tx: (typeof items)[number]) => {
+      const fullName = tx.customer?.name ?? 'Unknown';
+      const initials = fullName
+        .split(' ')
+        .map((w: string) => w[0])
+        .join('')
+        .toUpperCase()
+        .slice(0, 2);
+      return {
+        ...tx,
+        customerName: fullName,
+        customerInitials: initials,
+        amountIn: Number(tx.amountIn),
+        amountOut: Number(tx.amountOut),
+        rateApplied: Number(tx.rateApplied),
+        spread: Number(tx.spread),
+      };
+    });
+
     return {
-      items,
+      items: mapped,
       total,
       page,
       limit,
@@ -136,13 +152,9 @@ export class TransactionsService {
         spread: Number(spread),
         status: 'COMPLETED',
         tellerId: 'TELLER-04A',
-        kycName: dto.kycName,
-        kycDocId: dto.kycDocId,
-        kycPurpose: dto.kycPurpose,
-        kycSource: dto.kycSource,
       },
       include: {
-        customer: { select: { fullName: true, customerId: true } },
+        customer: { select: { name: true, customerId: true } },
       },
     });
 
