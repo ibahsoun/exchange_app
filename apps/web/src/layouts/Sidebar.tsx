@@ -1,24 +1,27 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
-import {
-  LayoutDashboard,
-  TrendingUp,
-  GitCompareArrows,
-  ArrowLeftRight,
-  Users,
-  Settings,
-} from 'lucide-react';
+import { LayoutDashboard, TrendingUp, ArrowLeftRight, Users, Settings, Clock, Percent } from 'lucide-react';
+import { useSettings } from '@/contexts/SettingsContext';
 
 const navItems = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/live-rates', label: 'Live Rates', icon: TrendingUp },
-  { to: '/source-comparison', label: 'Source Compare', icon: GitCompareArrows },
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight },
   { to: '/customers', label: 'Customers', icon: Users },
 ];
 
 export function Sidebar() {
   const location = useLocation();
+  const { showSettlementTerms, showMargins } = useSettings();
+
+  const dynamicItems = [
+    ...(showSettlementTerms
+      ? [{ to: '/settlement-terms', label: 'Settlement Terms', icon: Clock }]
+      : []),
+    ...(showMargins
+      ? [{ to: '/margins', label: 'Margins', icon: Percent }]
+      : []),
+  ];
 
   return (
     <aside className="w-[228px] min-w-[228px] bg-terminal-card border-r border-terminal-border flex flex-col h-full">
@@ -41,7 +44,7 @@ export function Sidebar() {
         </div>
         <div className="overflow-hidden">
           <div className="text-[13px] font-bold text-text-primary leading-tight truncate">
-            Unified Terminal
+            Exchange Center
           </div>
           <div className="text-xxs text-text-muted uppercase tracking-widest mt-0.5">
             Enterprise Edition
@@ -67,15 +70,45 @@ export function Sidebar() {
               <Icon
                 className={cn(
                   'w-[18px] h-[18px] flex-shrink-0 transition-colors',
-                  isActive
-                    ? 'text-white'
-                    : 'text-text-muted group-hover:text-text-secondary',
+                  isActive ? 'text-white' : 'text-text-muted group-hover:text-text-secondary',
                 )}
               />
               {label}
             </NavLink>
           );
         })}
+
+        {/* ── Dynamic sections ──────────────────────────── */}
+        {dynamicItems.length > 0 && (
+          <>
+            <div className="pt-3 pb-1 px-3">
+              <div className="h-px bg-terminal-border" />
+            </div>
+            {dynamicItems.map(({ to, label, icon: Icon }) => {
+              const isActive = location.pathname.startsWith(to);
+              return (
+                <NavLink
+                  key={to}
+                  to={to}
+                  className={cn(
+                    'group flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium transition-all duration-150',
+                    isActive
+                      ? 'bg-primary text-white shadow-glow-blue'
+                      : 'text-text-secondary hover:text-text-primary hover:bg-terminal-surface',
+                  )}
+                >
+                  <Icon
+                    className={cn(
+                      'w-[18px] h-[18px] flex-shrink-0 transition-colors',
+                      isActive ? 'text-white' : 'text-text-muted group-hover:text-text-secondary',
+                    )}
+                  />
+                  {label}
+                </NavLink>
+              );
+            })}
+          </>
+        )}
       </nav>
 
       {/* ── Bottom: Settings ─────────────────────────── */}
@@ -97,13 +130,13 @@ export function Sidebar() {
       {/* ── User panel ───────────────────────────────── */}
       <div className="px-4 py-4 border-t border-terminal-border flex items-center gap-3">
         <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center text-[11px] font-bold text-white shadow-sm">
-          MV
+          HH
         </div>
         <div className="overflow-hidden">
           <div className="text-[13px] font-semibold text-text-primary truncate">
-            Marcus V. Teller
+            Hussein Hobballah
           </div>
-          <div className="text-xxs text-text-muted">Station 04-A</div>
+          <div className="text-xxs text-text-muted">Tyre</div>
         </div>
       </div>
     </aside>

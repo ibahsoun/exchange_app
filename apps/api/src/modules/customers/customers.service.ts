@@ -21,7 +21,7 @@ export class CustomersService {
   constructor(@Inject(PrismaService) private prisma: PrismaService) {}
 
   async findAll(filters: CustomerFilters = {}) {
-    const { search, page = 1, limit = 25 } = filters;
+    const { search, page = 1, limit = 10000 } = filters;
 
     const where: Record<string, unknown> = {};
 

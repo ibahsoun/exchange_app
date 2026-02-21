@@ -118,11 +118,14 @@ export class TransactionsService {
     }
 
     // Get live rate for the pair
-    const rates = await this.ratesService.getLatestRates();
-    const rate = rates.find((r) => r.base === dto.base && r.quote === 'USD');
-    const quoteRate = rates.find((r) => r.base === dto.quote && r.quote === 'USD');
+    // Rates are stored as USD/<quote> (e.g. USD/EUR, USD/GBP)
+    const rates = await this.ratesService.getLatestRates('USD');
 
-    if (!rate && dto.base !== 'USD') {
+    // Find the rate where USD is base and the currency is the quote
+    const baseRate = dto.base === 'USD' ? null : rates.find((r) => r.base === 'USD' && r.quote === dto.base);
+    const quoteRate = dto.quote === 'USD' ? null : rates.find((r) => r.base === 'USD' && r.quote === dto.quote);
+
+    if (!baseRate && dto.base !== 'USD') {
       throw new BadRequestException(`No rate available for ${dto.base}`);
     }
     if (!quoteRate && dto.quote !== 'USD') {
@@ -130,12 +133,32 @@ export class TransactionsService {
     }
 
     // Calculate conversion
-    const baseBid = dto.base === 'USD' ? 1 : rate!.bid;
-    const quoteAsk = dto.quote === 'USD' ? 1 : quoteRate!.ask;
-    const usdAmount = dto.amountIn * baseBid;
-    const amountOut = usdAmount / quoteAsk;
-    const effectiveRate = amountOut / dto.amountIn;
-    const spread = rate ? rate.spread : 0;
+    // For USD/<currency> pairs: bid = how many units of <currency> per 1 USD
+    // Converting base → USD: divide by the pair's ask (customer sells base, we buy)
+    // Converting USD → quote: multiply by the pair's bid (customer buys quote, we sell)
+    let amountOut: number;
+    let effectiveRate: number;
+    let spread: number;
+
+    if (dto.base === 'USD' && quoteRate) {
+      // USD → foreign: multiply by bid
+      amountOut = dto.amountIn * quoteRate.bid;
+      effectiveRate = quoteRate.bid;
+      spread = quoteRate.spread;
+    } else if (dto.quote === 'USD' && baseRate) {
+      // Foreign → USD: divide by ask
+      amountOut = dto.amountIn / baseRate.ask;
+      effectiveRate = 1 / baseRate.ask;
+      spread = baseRate.spread;
+    } else if (baseRate && quoteRate) {
+      // Foreign → Foreign: go through USD
+      const usdAmount = dto.amountIn / baseRate.ask;
+      amountOut = usdAmount * quoteRate.bid;
+      effectiveRate = amountOut / dto.amountIn;
+      spread = baseRate.spread + quoteRate.spread;
+    } else {
+      throw new BadRequestException(`Cannot calculate rate for ${dto.base}/${dto.quote}`);
+    }
 
     const receiptId = `TX-${++this.receiptCounter}`;
 

@@ -1,6 +1,6 @@
 /**
  * Adapter interface for rate data providers.
- * Implement this to add new rate sources (XE, Open Exchange Rates, etc).
+ * Implement this to add new rate sources (Open Exchange Rates, etc).
  */
 export interface RateQuote {
   base: string;

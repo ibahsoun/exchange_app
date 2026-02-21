@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Bell, HelpCircle, Shield } from 'lucide-react';
+import { Bell, HelpCircle, Moon, Shield, Sun } from 'lucide-react';
 import { useRatesConnected } from '@/hooks/useRates';
+import { useTheme } from '@/contexts/ThemeContext';
 
 function useClock() {
   const [now, setNow] = useState(new Date());
@@ -14,6 +15,7 @@ function useClock() {
 export function Header() {
   const now = useClock();
   const wsConnected = useRatesConnected();
+  const { theme, toggleTheme } = useTheme();
 
   const time = now.toLocaleTimeString('en-US', {
     hour12: false,
@@ -68,6 +70,19 @@ export function Header() {
           </div>
           <div className="text-xxs text-text-muted tracking-wider">{date}</div>
         </div>
+
+        {/* Theme toggle */}
+        <button
+          onClick={toggleTheme}
+          className="p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-terminal-surface transition-colors mr-1"
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {theme === 'dark' ? (
+            <Sun className="w-[18px] h-[18px]" />
+          ) : (
+            <Moon className="w-[18px] h-[18px]" />
+          )}
+        </button>
 
         {/* Notifications */}
         <button className="relative p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-terminal-surface transition-colors">

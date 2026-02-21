@@ -2,6 +2,62 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Theme CSS Variables ───────────────────────────────── */
+:root {
+  /* Dark theme (default) */
+  --terminal-bg: #080c16;
+  --terminal-card: #0f1629;
+  --terminal-surface: #141b2d;
+  --terminal-surface-2: #1a2236;
+  --terminal-border: #1c2840;
+  --terminal-border-light: #283650;
+
+  --text-primary: #e8edf5;
+  --text-secondary: #8b9dc3;
+  --text-muted: #5a6b87;
+  --text-inverse: #080c16;
+
+  --status-green-subtle: #052e16;
+  --status-red-subtle: #450a0a;
+  --status-yellow-subtle: #451a03;
+  --status-blue-subtle: #172554;
+
+  --primary-subtle: #172554;
+  --primary-muted: #1e40af;
+
+  --shadow-color: rgba(28, 40, 64, 0.6);
+  --shadow-drop: rgba(0, 0, 0, 0.35);
+  --shadow-drop-lg: rgba(0, 0, 0, 0.5);
+  --shadow-inner: rgba(255, 255, 255, 0.03);
+}
+
+.light {
+  --terminal-bg: #f0f4f8;
+  --terminal-card: #ffffff;
+  --terminal-surface: #f8fafc;
+  --terminal-surface-2: #f1f5f9;
+  --terminal-border: #e2e8f0;
+  --terminal-border-light: #cbd5e1;
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --text-inverse: #e8edf5;
+
+  --status-green-subtle: #dcfce7;
+  --status-red-subtle: #fee2e2;
+  --status-yellow-subtle: #fef3c7;
+  --status-blue-subtle: #dbeafe;
+
+  --primary-subtle: #dbeafe;
+  --primary-muted: #3b82f6;
+
+  --shadow-color: rgba(0, 0, 0, 0.08);
+  --shadow-drop: rgba(0, 0, 0, 0.08);
+  --shadow-drop-lg: rgba(0, 0, 0, 0.12);
+  --shadow-inner: rgba(255, 255, 255, 0.8);
+}
+
 @layer base {
   *,
   *::before,
@@ -20,8 +76,8 @@
   body {
     min-height: 100vh;
     overflow-x: hidden;
-    background: #080c16;
-    color: #e8edf5;
+    background: var(--terminal-bg);
+    color: var(--text-primary);
   }
 
   /* Scrollbar */
@@ -33,11 +89,11 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: #1c2840;
+    background: var(--terminal-border);
     border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #283650;
+    background: var(--terminal-border-light);
   }
 
   /* Selection */

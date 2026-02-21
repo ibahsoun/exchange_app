@@ -17,8 +17,14 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/socket.io': {
-        target: 'ws://localhost:4000',
+        target: 'http://localhost:4000',
+        changeOrigin: true,
         ws: true,
+        configure: (proxy) => {
+          proxy.on('error', () => {
+            // Silence transient Socket.IO WebSocket upgrade errors
+          });
+        },
       },
     },
   },

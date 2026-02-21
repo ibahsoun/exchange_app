@@ -7,40 +7,40 @@ const config: Config = {
       colors: {
         // ─── Core surfaces (darkest → lightest) ──────────────
         terminal: {
-          bg: '#080c16',        // page background
-          card: '#0f1629',      // card / sidebar / header
-          surface: '#141b2d',   // elevated surface inside cards
-          'surface-2': '#1a2236', // double-nested surface (inputs, stat boxes)
-          border: '#1c2840',    // primary border
-          'border-light': '#283650', // lighter border (hover, focus rings)
+          bg: 'var(--terminal-bg)',
+          card: 'var(--terminal-card)',
+          surface: 'var(--terminal-surface)',
+          'surface-2': 'var(--terminal-surface-2)',
+          border: 'var(--terminal-border)',
+          'border-light': 'var(--terminal-border-light)',
         },
 
         // ─── Primary action blue ─────────────────────────────
         primary: {
           DEFAULT: '#3b82f6',
           hover: '#2563eb',
-          subtle: '#172554',    // very dark blue tint for backgrounds
-          muted: '#1e40af',
+          subtle: 'var(--primary-subtle)',
+          muted: 'var(--primary-muted)',
         },
 
         // ─── Text hierarchy ──────────────────────────────────
         text: {
-          primary: '#e8edf5',   // headings, values
-          secondary: '#8b9dc3', // body text, labels
-          muted: '#5a6b87',     // hints, timestamps
-          inverse: '#080c16',
+          primary: 'var(--text-primary)',
+          secondary: 'var(--text-secondary)',
+          muted: 'var(--text-muted)',
+          inverse: 'var(--text-inverse)',
         },
 
         // ─── Semantic status ─────────────────────────────────
         status: {
           green: '#34d399',
-          'green-subtle': '#052e16',
+          'green-subtle': 'var(--status-green-subtle)',
           red: '#f87171',
-          'red-subtle': '#450a0a',
+          'red-subtle': 'var(--status-red-subtle)',
           yellow: '#fbbf24',
-          'yellow-subtle': '#451a03',
+          'yellow-subtle': 'var(--status-yellow-subtle)',
           blue: '#60a5fa',
-          'blue-subtle': '#172554',
+          'blue-subtle': 'var(--status-blue-subtle)',
         },
 
         // ─── Accent ──────────────────────────────────────────
@@ -72,11 +72,11 @@ const config: Config = {
 
       boxShadow: {
         terminal:
-          '0 0 0 1px rgba(28, 40, 64, 0.6), 0 4px 24px rgba(0, 0, 0, 0.35)',
+          '0 0 0 1px var(--shadow-color), 0 4px 24px var(--shadow-drop)',
         'terminal-lg':
-          '0 0 0 1px rgba(28, 40, 64, 0.6), 0 8px 40px rgba(0, 0, 0, 0.5)',
+          '0 0 0 1px var(--shadow-color), 0 8px 40px var(--shadow-drop-lg)',
         'glow-blue': '0 0 24px rgba(59, 130, 246, 0.12)',
-        'inner-light': 'inset 0 1px 0 0 rgba(255, 255, 255, 0.03)',
+        'inner-light': 'inset 0 1px 0 0 var(--shadow-inner)',
       },
 
       animation: {
@@ -92,6 +92,9 @@ const config: Config = {
         slideInRight: {
           '0%': { opacity: '0', transform: 'translateX(16px)' },
           '100%': { opacity: '1', transform: 'translateX(0)' },
+        },
+        shimmer: {
+          '100%': { transform: 'translateX(100%)' },
         },
       },
     },

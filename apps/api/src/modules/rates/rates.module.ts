@@ -8,7 +8,6 @@ import { MultiSourceService } from './multi-source.service';
 import {
   MockRateProvider,
   CurrencyFreaksProvider,
-  XeProvider,
   TwelveDataProvider,
   OandaProvider,
 } from './providers';
@@ -32,7 +31,6 @@ import { RATE_PROVIDER, MULTI_SOURCE_PROVIDERS } from './rates.constants';
       provide: MULTI_SOURCE_PROVIDERS,
       useFactory: () => [
         new CurrencyFreaksProvider(),
-        new XeProvider(),
         new TwelveDataProvider(),
         new OandaProvider(),
       ],

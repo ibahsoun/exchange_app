@@ -15,7 +15,7 @@ export class CustomersController {
     return this.customersService.findAll({
       search,
       page: page ? parseInt(page) : 1,
-      limit: limit ? parseInt(limit) : 25,
+      limit: limit ? parseInt(limit) : 10000,
     });
   }
 

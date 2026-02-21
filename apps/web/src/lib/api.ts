@@ -96,6 +96,14 @@ export interface MultiSourceBoardResponse {
   autoSyncIntervalSec: number;
 }
 
+// ─── Rate Scheduler ──────────────────────────────────────
+export const schedulerApi = {
+  getStatus: () => get<{ paused: boolean }>('/rates/scheduler/status'),
+  pause: () => post<{ paused: boolean }>('/rates/scheduler/pause'),
+  resume: () => post<{ paused: boolean }>('/rates/scheduler/resume'),
+  fetchOnce: () => post<{ ok: boolean }>('/rates/scheduler/fetch-once'),
+};
+
 export const multiSourceApi = {
   getBoard: () => get<MultiSourceBoardResponse>('/rates/multi-source-board'),
   refresh: () => post<MultiSourceBoardResponse>('/rates/multi-source-board/refresh'),

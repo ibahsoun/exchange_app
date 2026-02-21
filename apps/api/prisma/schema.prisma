@@ -11,7 +11,7 @@ datasource db {
 
 model RateSource {
   id        String   @id @default(cuid())
-  name      String   @unique          // "mock", "openexchangerates", "xe"
+  name      String   @unique          // "mock", "currencyfreaks", "twelvedata", "oanda"
   status    String   @default("active") // active, disabled, error
   priority  Int      @default(0)
   config    Json?                      // provider-specific config (API keys etc)
@@ -71,7 +71,7 @@ model RateTick {
   id        String   @id @default(cuid())
   base      String                        // "USD"
   quote     String                        // "EUR"
-  source    String                        // "currencyfreaks", "xe", "twelvedata", "oanda"
+  source    String                        // "currencyfreaks", "twelvedata", "oanda"
   bid       Decimal? @db.Decimal(18, 8)   // nullable — some sources only provide mid
   ask       Decimal? @db.Decimal(18, 8)
   mid       Decimal  @db.Decimal(18, 8)
