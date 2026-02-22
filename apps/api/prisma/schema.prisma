@@ -83,16 +83,23 @@ model RateTick {
 }
 
 model StoreRate {
-  id         String   @id @default(cuid())
-  base       String                        // "USD"
-  quote      String                        // "EUR"
-  mid        Decimal  @db.Decimal(18, 8)
-  mode       String   @default("AUTO_AVG") // AUTO_AVG, MANUAL_SOURCE, CUSTOM_VALUE, LOCKED
-  sourceHint String?                       // which source if MANUAL_SOURCE
-  reason     String?                       // why locked/custom
-  updatedBy  String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id            String   @id @default(cuid())
+  base          String                        // "USD"
+  quote         String                        // "EUR"
+  mid           Decimal  @db.Decimal(18, 8)
+  mode          String   @default("AUTO_AVG") // AUTO_AVG, MANUAL_SOURCE, CUSTOM_VALUE, LOCKED
+  sourceHint    String?                       // which source if MANUAL_SOURCE
+  reason        String?                       // why locked/custom
+  updatedBy     String?
+  spreadType    String   @default("PERCENTAGE") // PERCENTAGE | FIXED
+  spreadMode    String   @default("SYMMETRIC")  // SYMMETRIC | ASYMMETRIC
+  fixedUnit     String   @default("RAW")        // RAW | PIPS
+  spreadPercent Decimal  @db.Decimal(18, 8) @default(0)
+  spreadFixed   Decimal  @db.Decimal(18, 8) @default(0)
+  buyMargin     Decimal  @db.Decimal(18, 8) @default(0)
+  sellMargin    Decimal  @db.Decimal(18, 8) @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@unique([base, quote])
 }

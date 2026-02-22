@@ -7,8 +7,10 @@ import {
   OUTLIER_THRESHOLD_PCT,
   DEFAULT_BASE,
   SUPPORTED_PAIRS,
+  TROY_OZ_TO_GRAMS,
 } from './rates.constants';
 import type { StoreRateMode } from './rates.constants';
+import { computeBidAsk, spreadConfigFromRow, type SpreadType, type SpreadMode, type FixedUnit, type SpreadConfig, DEFAULT_SPREAD_CONFIG } from './spread.util';
 
 // ─── Response DTOs ─────────────────────────────────────────
 
@@ -35,7 +37,22 @@ export interface BoardRow {
   flag?: string;
   sourceRates: Record<string, SourceRateCell>;
   globalAvg: { buy: number | null; sell: number | null; mid: number };
-  storeRate: { mid: number; mode: StoreRateMode; sourceHint: string | null; label: string };
+  storeRate: {
+    mid: number;
+    mode: StoreRateMode;
+    sourceHint: string | null;
+    label: string;
+    spreadType: SpreadType;
+    spreadMode: SpreadMode;
+    fixedUnit: FixedUnit;
+    spreadPercent: number;
+    spreadFixed: number;
+    buyMargin: number;
+    sellMargin: number;
+    bid: number;
+    ask: number;
+    spread: number;
+  };
   variance: { points: number; direction: 'tight' | 'wide' | 'normal' };
 }
 
@@ -217,6 +234,48 @@ export class MultiSourceService {
       });
     }
 
+    // Derive XAUG (gold gram) row from XAU
+    const xauRow = rows.find((r) => r.quote === 'XAU');
+    const xaugMeta = pairMeta.get('XAUG');
+    if (xauRow && xaugMeta) {
+      const factor = TROY_OZ_TO_GRAMS;
+      const xaugSourceRates: Record<string, SourceRateCell> = {};
+      for (const [key, cell] of Object.entries(xauRow.sourceRates)) {
+        if (cell.status === 'missing') {
+          xaugSourceRates[key] = { ...cell };
+        } else {
+          xaugSourceRates[key] = {
+            buy: cell.buy != null ? Number((cell.buy * factor).toPrecision(8)) : null,
+            sell: cell.sell != null ? Number((cell.sell * factor).toPrecision(8)) : null,
+            mid: Number((cell.mid * factor).toPrecision(8)),
+            latencyMs: cell.latencyMs,
+            status: cell.status,
+          };
+        }
+      }
+
+      const xaugAvgMid = xauRow.globalAvg.mid > 0 ? xauRow.globalAvg.mid * factor : 0;
+      const existingXaug = storeRateMap.get('XAUG');
+      const xaugStoreRate = this.resolveStoreRate(existingXaug, xaugAvgMid, 'XAUG', xaugSourceRates);
+
+      if ((!existingXaug || existingXaug.mode === 'AUTO_AVG') && xaugAvgMid > 0) {
+        this.upsertStoreRate(base, 'XAUG', xaugAvgMid, 'AUTO_AVG').catch((e) =>
+          this.logger.error(`Failed to upsert store rate XAUG: ${e}`),
+        );
+      }
+
+      rows.push({
+        base,
+        quote: 'XAUG',
+        pair: xaugMeta.label,
+        quoteName: xaugMeta.quoteName,
+        sourceRates: xaugSourceRates,
+        globalAvg: { buy: null, sell: null, mid: Number(xaugAvgMid.toPrecision(8)) },
+        storeRate: xaugStoreRate,
+        variance: xauRow.variance,
+      });
+    }
+
     // Aggregate stats
     const onlineSources = sourceStatuses.filter((s) => s.status === 'online');
     const avgLatency =
@@ -265,8 +324,31 @@ export class MultiSourceService {
     sourceHint?: string;
     reason?: string;
     updatedBy?: string;
+    spreadType?: SpreadType;
+    spreadMode?: SpreadMode;
+    fixedUnit?: FixedUnit;
+    spreadPercent?: number;
+    spreadFixed?: number;
+    buyMargin?: number;
+    sellMargin?: number;
   }) {
     const mid = dto.mid ?? 0;
+
+    const updateData: Record<string, unknown> = {
+      mid,
+      mode: dto.mode,
+      sourceHint: dto.sourceHint ?? null,
+      reason: dto.reason ?? null,
+      updatedBy: dto.updatedBy ?? null,
+    };
+
+    if (dto.spreadType !== undefined) updateData.spreadType = dto.spreadType;
+    if (dto.spreadMode !== undefined) updateData.spreadMode = dto.spreadMode;
+    if (dto.fixedUnit !== undefined) updateData.fixedUnit = dto.fixedUnit;
+    if (dto.spreadPercent !== undefined) updateData.spreadPercent = dto.spreadPercent;
+    if (dto.spreadFixed !== undefined) updateData.spreadFixed = dto.spreadFixed;
+    if (dto.buyMargin !== undefined) updateData.buyMargin = dto.buyMargin;
+    if (dto.sellMargin !== undefined) updateData.sellMargin = dto.sellMargin;
 
     const result = await this.prisma.storeRate.upsert({
       where: { base_quote: { base: dto.base, quote: dto.quote } },
@@ -278,19 +360,103 @@ export class MultiSourceService {
         sourceHint: dto.sourceHint ?? null,
         reason: dto.reason ?? null,
         updatedBy: dto.updatedBy ?? null,
+        spreadType: dto.spreadType ?? 'PERCENTAGE',
+        spreadMode: dto.spreadMode ?? 'SYMMETRIC',
+        fixedUnit: dto.fixedUnit ?? 'RAW',
+        spreadPercent: dto.spreadPercent ?? 0,
+        spreadFixed: dto.spreadFixed ?? 0,
+        buyMargin: dto.buyMargin ?? 0,
+        sellMargin: dto.sellMargin ?? 0,
       },
-      update: {
-        mid,
-        mode: dto.mode,
-        sourceHint: dto.sourceHint ?? null,
-        reason: dto.reason ?? null,
-        updatedBy: dto.updatedBy ?? null,
-      },
+      update: updateData,
     });
 
-    // Invalidate cache so next getBoard() fetches fresh
     this.cachedBoard = null;
     return result;
+  }
+
+  // ─── Spread management ─────────────────────────────────
+
+  async getAllSpreads() {
+    const storeRates = await this.prisma.storeRate.findMany({
+      orderBy: { quote: 'asc' },
+    });
+    const pairMeta = new Map(SUPPORTED_PAIRS.map((p) => [p.quote, p]));
+
+    return storeRates.map((sr) => {
+      const mid = Number(sr.mid);
+      const config = spreadConfigFromRow(sr);
+      const { bid, ask, spread } = computeBidAsk(mid, config, sr.quote);
+      const meta = pairMeta.get(sr.quote);
+
+      return {
+        base: sr.base,
+        quote: sr.quote,
+        pair: meta?.label ?? `${sr.base}/${sr.quote}`,
+        quoteName: meta?.quoteName ?? sr.quote,
+        mid,
+        mode: sr.mode as string,
+        sourceHint: sr.sourceHint,
+        spreadType: config.spreadType,
+        spreadMode: config.spreadMode,
+        fixedUnit: config.fixedUnit,
+        spreadPercent: config.spreadPercent,
+        spreadFixed: config.spreadFixed,
+        buyMargin: config.buyMargin,
+        sellMargin: config.sellMargin,
+        bid,
+        ask,
+        spread,
+        updatedAt: sr.updatedAt.toISOString(),
+      };
+    });
+  }
+
+  async updateSpread(dto: {
+    base: string;
+    quote: string;
+    spreadType: SpreadType;
+    spreadMode: SpreadMode;
+    fixedUnit?: FixedUnit;
+    spreadPercent?: number;
+    spreadFixed?: number;
+    buyMargin?: number;
+    sellMargin?: number;
+  }) {
+    const result = await this.prisma.storeRate.upsert({
+      where: { base_quote: { base: dto.base, quote: dto.quote } },
+      create: {
+        base: dto.base,
+        quote: dto.quote,
+        mid: 0,
+        spreadType: dto.spreadType,
+        spreadMode: dto.spreadMode,
+        fixedUnit: dto.fixedUnit ?? 'RAW',
+        spreadPercent: dto.spreadPercent ?? 0,
+        spreadFixed: dto.spreadFixed ?? 0,
+        buyMargin: dto.buyMargin ?? 0,
+        sellMargin: dto.sellMargin ?? 0,
+      },
+      update: {
+        spreadType: dto.spreadType,
+        spreadMode: dto.spreadMode,
+        fixedUnit: dto.fixedUnit ?? 'RAW',
+        spreadPercent: dto.spreadPercent ?? 0,
+        spreadFixed: dto.spreadFixed ?? 0,
+        buyMargin: dto.buyMargin ?? 0,
+        sellMargin: dto.sellMargin ?? 0,
+      },
+    });
+    this.cachedBoard = null;
+    return result;
+  }
+
+  /** Get the current mid rate for a pair (for validation) */
+  async getMidForPair(base: string, quote: string): Promise<number> {
+    const sr = await this.prisma.storeRate.findUnique({
+      where: { base_quote: { base, quote } },
+    });
+    return sr ? Number(sr.mid) : 0;
   }
 
   // ─── Internal helpers ────────────────────────────────────
@@ -306,42 +472,47 @@ export class MultiSourceService {
   }
 
   private resolveStoreRate(
-    existing: { mid: unknown; mode: string; sourceHint: string | null } | undefined,
+    existing: Record<string, unknown> | undefined,
     avgMid: number,
-    _quote: string,
+    quote: string,
     _sourceRates: Record<string, SourceRateCell>,
   ): BoardRow['storeRate'] {
+    const config = existing ? spreadConfigFromRow(existing) : DEFAULT_SPREAD_CONFIG;
+
     if (!existing) {
+      const { bid, ask, spread } = computeBidAsk(avgMid || 0, config, quote);
       return {
         mid: Number((avgMid || 0).toPrecision(8)),
         mode: 'AUTO_AVG',
         sourceHint: null,
         label: 'Auto (Avg)',
+        ...config,
+        bid,
+        ask,
+        spread,
       };
     }
 
-    const mode = existing.mode as StoreRateMode;
+    const mode = (existing.mode as StoreRateMode) ?? 'AUTO_AVG';
     const labels: Record<StoreRateMode, string> = {
       AUTO_AVG: 'Auto (Avg)',
-      MANUAL_SOURCE: `Manual (${existing.sourceHint ?? '?'})`,
+      MANUAL_SOURCE: `Manual (${(existing.sourceHint as string) ?? '?'})`,
       CUSTOM_VALUE: 'Custom',
       LOCKED: 'Locked',
     };
 
-    if (mode === 'AUTO_AVG') {
-      return {
-        mid: Number((avgMid || 0).toPrecision(8)),
-        mode,
-        sourceHint: null,
-        label: labels[mode],
-      };
-    }
+    const mid = mode === 'AUTO_AVG' ? (avgMid || 0) : Number(existing.mid);
+    const { bid, ask, spread } = computeBidAsk(mid, config, quote);
 
     return {
-      mid: Number(existing.mid),
+      mid: Number(mid.toPrecision(8)),
       mode,
-      sourceHint: existing.sourceHint,
+      sourceHint: (existing.sourceHint as string | null) ?? null,
       label: labels[mode],
+      ...config,
+      bid,
+      ask,
+      spread,
     };
   }
 
@@ -361,6 +532,7 @@ export class MultiSourceService {
   }
 
   private async upsertStoreRate(base: string, quote: string, mid: number, mode: StoreRateMode) {
+    // Only update mid — preserve existing spread fields
     await this.prisma.storeRate.upsert({
       where: { base_quote: { base, quote } },
       create: { base, quote, mid, mode },

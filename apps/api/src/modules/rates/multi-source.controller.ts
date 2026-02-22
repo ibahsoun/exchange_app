@@ -1,24 +1,22 @@
-import { Controller, Get, Post, Body, Inject } from '@nestjs/common';
+import { Controller, Get, Post, Body, Inject, BadRequestException } from '@nestjs/common';
 import { MultiSourceService } from './multi-source.service';
 import type { StoreRateMode } from './rates.constants';
+import { validateSpread, type SpreadType, type SpreadMode, type FixedUnit } from './spread.util';
 
 @Controller('rates')
 export class MultiSourceController {
   constructor(@Inject(MultiSourceService) private multiSourceService: MultiSourceService) {}
 
-  /** GET /api/rates/multi-source-board — full comparison board data */
   @Get('multi-source-board')
   getBoard() {
     return this.multiSourceService.getBoard();
   }
 
-  /** POST /api/rates/multi-source-board/refresh — force refresh from all providers */
   @Post('multi-source-board/refresh')
   refreshBoard() {
     return this.multiSourceService.refreshBoard();
   }
 
-  /** POST /api/rates/store-rate — update the store rate mode for a pair */
   @Post('store-rate')
   updateStoreRate(
     @Body()
@@ -30,8 +28,51 @@ export class MultiSourceController {
       sourceHint?: string;
       reason?: string;
       updatedBy?: string;
+      spreadType?: SpreadType;
+      spreadMode?: SpreadMode;
+      fixedUnit?: FixedUnit;
+      spreadPercent?: number;
+      spreadFixed?: number;
+      buyMargin?: number;
+      sellMargin?: number;
     },
   ) {
     return this.multiSourceService.updateStoreRate(body);
+  }
+
+  @Get('spreads')
+  getAllSpreads() {
+    return this.multiSourceService.getAllSpreads();
+  }
+
+  @Post('spread')
+  async updateSpread(
+    @Body()
+    body: {
+      base: string;
+      quote: string;
+      spreadType: SpreadType;
+      spreadMode: SpreadMode;
+      fixedUnit?: FixedUnit;
+      spreadPercent?: number;
+      spreadFixed?: number;
+      buyMargin?: number;
+      sellMargin?: number;
+    },
+  ) {
+    const mid = await this.multiSourceService.getMidForPair(body.base, body.quote);
+    const config = {
+      spreadType: body.spreadType,
+      spreadMode: body.spreadMode,
+      fixedUnit: (body.fixedUnit ?? 'RAW') as FixedUnit,
+      spreadPercent: body.spreadPercent ?? 0,
+      spreadFixed: body.spreadFixed ?? 0,
+      buyMargin: body.buyMargin ?? 0,
+      sellMargin: body.sellMargin ?? 0,
+    };
+    const err = validateSpread(mid, config, body.quote);
+    if (err) throw new BadRequestException(err);
+
+    return this.multiSourceService.updateSpread(body);
   }
 }

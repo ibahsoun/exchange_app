@@ -8,57 +8,36 @@ import {
   User,
   Search,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, formatRate, formatAmount } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
-import { useRates } from '@/hooks/useRates';
-import { transactionsApi, customersApi } from '@/lib/api';
-import type { LiveRate } from '@/stores/rates.store';
+import { transactionsApi, customersApi, spreadApi, type SpreadRow } from '@/lib/api';
 
 // ─── Currency meta ──────────────────────────────────────────
 const CURRENCIES = [
   { code: 'USD', name: 'US Dollar', symbol: '$' },
+  { code: 'CNY', name: 'Chinese Yuan', symbol: '¥' },
+  { code: 'BRL', name: 'Brazilian Real', symbol: 'R$' },
   { code: 'EUR', name: 'Euro', symbol: '€' },
-  { code: 'GBP', name: 'Pound', symbol: '£' },
-  { code: 'JPY', name: 'Yen', symbol: '¥' },
-  { code: 'CHF', name: 'Franc', symbol: 'Fr' },
-  { code: 'CAD', name: 'CAD', symbol: 'C$' },
-  { code: 'AUD', name: 'AUD', symbol: 'A$' },
-  { code: 'CNY', name: 'Yuan', symbol: '¥' },
-  { code: 'ARS', name: 'Peso', symbol: '$' },
-  { code: 'PYG', name: 'Guarani', symbol: '₲' },
-  { code: 'BRL', name: 'Real', symbol: 'R$' },
-  { code: 'AED', name: 'Dirham', symbol: 'د' },
-  { code: 'USDT', name: 'USDT', symbol: '₮' },
+  { code: 'PYG', name: 'Paraguayan Guarani', symbol: '₲' },
+  { code: 'USDT', name: 'Tether', symbol: '₮' },
+  { code: 'AED', name: 'Emirates Dirham', symbol: 'د' },
+  { code: 'ARS', name: 'Argentine Peso', symbol: '$' },
+  { code: 'XAU', name: 'Gold (Troy Oz)', symbol: 'Au' },
+  { code: 'XAUG', name: 'Gold (Gram)', symbol: 'Au' },
 ] as const;
 
 const CURRENCY_COLORS: Record<string, string> = {
   USD: 'bg-emerald-600',
   EUR: 'bg-blue-500',
-  GBP: 'bg-indigo-500',
-  JPY: 'bg-red-500',
-  CHF: 'bg-red-600',
-  CAD: 'bg-rose-700',
-  AUD: 'bg-blue-700',
   CNY: 'bg-amber-600',
   ARS: 'bg-sky-700',
   PYG: 'bg-red-700',
   BRL: 'bg-green-600',
   AED: 'bg-teal-600',
   USDT: 'bg-emerald-500',
+  XAU: 'bg-yellow-500',
+  XAUG: 'bg-yellow-600',
 };
-
-// ─── Helpers ────────────────────────────────────────────────
-function formatRate(n: number): string {
-  if (n >= 1000)
-    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (n >= 1)
-    return n.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
-  return n.toLocaleString('en-US', { minimumFractionDigits: 6, maximumFractionDigits: 6 });
-}
-
-function formatAmount(n: number): string {
-  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
 
 /** Generate a transaction reference */
 function generateRef() {
@@ -116,19 +95,19 @@ export function DashboardPage() {
   const [submitted, setSubmitted] = useState(false);
   const [ref] = useState(generateRef);
 
-  // ─── Store rates (live from API) ────────────────────────
-  const storeRates = useRates();
+  // ─── Pricing from backend (single source of truth) ─
+  const [pricing, setPricing] = useState<SpreadRow[]>([]);
 
-  // ─── Rate lookup helper ─────────────────────────────
-  const findRate = useCallback(
-    (code: string): { bid: number; ask: number } | null => {
-      if (code === 'USD') return { bid: 1, ask: 1 };
-      const r = storeRates.find((r: LiveRate) => r.base === 'USD' && r.quote === code);
-      if (r) return { bid: r.bid, ask: r.ask };
-      return null;
-    },
-    [storeRates],
-  );
+  useEffect(() => {
+    spreadApi.getAll().then(setPricing).catch(console.error);
+  }, []);
+
+  // Lookup returns backend-computed bid/ask/mid — no frontend spread math
+  const pricingMap = useMemo(() => {
+    const m = new Map<string, SpreadRow>();
+    for (const row of pricing) m.set(row.quote, row);
+    return m;
+  }, [pricing]);
 
   // ─── Bidirectional conversion ──────────────────────
   const conversionResult = useMemo(() => {
@@ -136,31 +115,43 @@ export function DashboardPage() {
     const amount = parseFloat(sourceAmount);
     if (isNaN(amount) || amount <= 0) return null;
     if (payCurrency === receiveCurrency)
-      return { rate: 1, computedPay: amount, computedReceive: amount, spread: 0 };
+      return { rate: 1, midRate: 1, rateLabel: 'bid' as const, computedPay: amount, computedReceive: amount };
 
-    const payRate = findRate(payCurrency);
-    const recvRate = findRate(receiveCurrency);
-    if (!payRate || !recvRate) return null;
+    // All rates are USD/QUOTE (how many QUOTE per 1 USD).
+    // bid/ask/mid come pre-computed from backend using the same
+    // storeRate + spreadConfig as LiveRates and SpreadSettings.
+    const USD: Pick<SpreadRow, 'bid' | 'ask' | 'mid'> = { bid: 1, ask: 1, mid: 1 };
+    const payPricing = payCurrency === 'USD' ? USD : pricingMap.get(payCurrency);
+    const recvPricing = receiveCurrency === 'USD' ? USD : pricingMap.get(receiveCurrency);
+    if (!payPricing || !recvPricing) return null;
+
+    // "Customer pays X" = customer SELLS X to us.
+    //   When selling USD  → quote rate bid  (customer gets fewer QUOTE)
+    //   When selling QUOTE → quote rate ask  (customer gives more QUOTE per USD)
 
     let computedPay: number;
     let computedReceive: number;
 
     if (editDirection === 'pay') {
-      // Forward: pay → receive
-      const usdAmount = payCurrency === 'USD' ? amount : amount * payRate.bid;
-      computedReceive = receiveCurrency === 'USD' ? usdAmount : usdAmount / recvRate.ask;
+      const usdAmount = payCurrency === 'USD' ? amount : amount / payPricing.ask;
+      computedReceive = receiveCurrency === 'USD' ? usdAmount : usdAmount * recvPricing.bid;
       computedPay = amount;
     } else {
-      // Reverse: receive → pay
-      const usdAmount = receiveCurrency === 'USD' ? amount : amount * recvRate.ask;
-      computedPay = payCurrency === 'USD' ? usdAmount : usdAmount / payRate.bid;
+      const usdAmount = receiveCurrency === 'USD' ? amount : amount / recvPricing.bid;
+      computedPay = payCurrency === 'USD' ? usdAmount : usdAmount * payPricing.ask;
       computedReceive = amount;
     }
 
-    const effectiveRate = computedReceive / computedPay;
+    // Mid-rate for display: 1 PAY → midPay USD → midPay × midRecv RECV
+    const midPay = payCurrency === 'USD' ? 1 : 1 / payPricing.mid;
+    const midRecv = receiveCurrency === 'USD' ? 1 : recvPricing.mid;
+    const midRate = midPay * midRecv;
 
-    return { rate: effectiveRate, computedPay, computedReceive, spread: 0 };
-  }, [payAmount, receiveAmount, editDirection, payCurrency, receiveCurrency, findRate]);
+    const customerRate = computedReceive / computedPay;
+    const rateLabel: 'bid' | 'ask' = payCurrency === 'USD' ? 'bid' : 'ask';
+
+    return { rate: customerRate, midRate, rateLabel, computedPay, computedReceive };
+  }, [payAmount, receiveAmount, editDirection, payCurrency, receiveCurrency, pricingMap]);
 
   // ─── Swap currencies ──────────────────────────────────
   const handleSwap = useCallback(() => {
@@ -497,12 +488,36 @@ export function DashboardPage() {
               </div>
             </div>
 
-            {/* Live rate & spread display */}
-            <div className="flex items-center justify-between px-1 text-sm">
+            {/* Rate & spread display */}
+            <div className="flex flex-col gap-1 px-1 text-sm">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Activity className="w-3.5 h-3.5 text-text-muted" />
+                  <span className="text-text-muted text-xs font-semibold">Market rate (mid)</span>
+                  <span className="text-text-muted font-mono text-[12px]">
+                    {conversionResult
+                      ? `1 ${payCurrency} = ${formatRate(conversionResult.midRate)} ${receiveCurrency}`
+                      : '—'}
+                  </span>
+                </div>
+                <span className="text-text-muted text-xs font-mono">
+                  Spread: {(() => {
+                    const quote = receiveCurrency !== 'USD' ? receiveCurrency : payCurrency;
+                    const cfg = pricingMap.get(quote);
+                    if (!cfg || cfg.spread === 0) return '—';
+                    if (cfg.spreadType === 'FIXED') {
+                      if (cfg.spreadMode === 'ASYMMETRIC') return `B:${cfg.buyMargin} / S:${cfg.sellMargin} fix`;
+                      return `${cfg.spreadFixed} fix`;
+                    }
+                    if (cfg.spreadMode === 'ASYMMETRIC') return `B:${cfg.buyMargin}% / S:${cfg.sellMargin}%`;
+                    return `${cfg.spreadPercent}%`;
+                  })()}
+                </span>
+              </div>
               <div className="flex items-center gap-2">
                 <Activity className="w-3.5 h-3.5 text-status-green" />
-                <span className="text-text-muted text-xs uppercase tracking-wide font-semibold">
-                  Live Rate
+                <span className="text-text-primary text-xs font-semibold">
+                  Customer rate ({conversionResult?.rateLabel ?? 'bid'})
                 </span>
                 <span className="text-text-primary font-mono font-medium text-[13px]">
                   {conversionResult
@@ -510,9 +525,6 @@ export function DashboardPage() {
                     : '—'}
                 </span>
               </div>
-              <span className="text-text-muted text-xs font-mono">
-                Spread: {conversionResult ? `${conversionResult.spread.toFixed(2)}%` : '—'}
-              </span>
             </div>
           </div>
         </div>

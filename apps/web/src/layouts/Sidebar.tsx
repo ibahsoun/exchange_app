@@ -1,6 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { cn } from '@/lib/utils';
-import { LayoutDashboard, TrendingUp, ArrowLeftRight, Users, Settings, Clock, Percent } from 'lucide-react';
+import { LayoutDashboard, TrendingUp, ArrowLeftRight, Users, Settings, Clock, Percent, SlidersHorizontal } from 'lucide-react';
 import { useSettings } from '@/contexts/SettingsContext';
 
 const navItems = [
@@ -8,6 +8,7 @@ const navItems = [
   { to: '/live-rates', label: 'Live Rates', icon: TrendingUp },
   { to: '/transactions', label: 'Transactions', icon: ArrowLeftRight },
   { to: '/customers', label: 'Customers', icon: Users },
+  { to: '/spread-settings', label: 'Spread Settings', icon: SlidersHorizontal },
 ];
 
 export function Sidebar() {

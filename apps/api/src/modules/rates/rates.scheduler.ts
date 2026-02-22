@@ -10,7 +10,7 @@ export class RatesScheduler implements OnModuleInit, OnModuleDestroy {
   private refreshTimer: NodeJS.Timeout | null = null;
   private broadcastTimer: NodeJS.Timeout | null = null;
   private snapshotTimer: NodeJS.Timeout | null = null;
-  private _paused = false;
+  private _paused = true;
 
   constructor(
     @Inject(RatesService) private ratesService: RatesService,
@@ -22,12 +22,7 @@ export class RatesScheduler implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit() {
-    this.logger.log('Starting rate scheduler...');
-    await this.ratesService.refreshRates();
-    this.startTimers();
-    this.logger.log(
-      `Scheduler active: refresh=${REFRESH_INTERVAL_MS}ms, broadcast=${WS_BROADCAST_INTERVAL_MS}ms`,
-    );
+    this.logger.log('Rate scheduler initialized (paused by default — enable in Settings)');
   }
 
   onModuleDestroy() {

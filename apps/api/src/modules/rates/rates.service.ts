@@ -2,6 +2,7 @@ import { Injectable, Inject, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { RateProvider } from './providers';
 import { RATE_PROVIDER, SUPPORTED_PAIRS, TROY_OZ_TO_GRAMS, DEFAULT_BASE } from './rates.constants';
+import { computeBidAsk, spreadConfigFromRow } from './spread.util';
 
 export interface LiveRate {
   base: string;
@@ -37,6 +38,9 @@ export class RatesService {
     if (this.cache.size === 0) {
       await this.refreshRates();
     }
+
+    // Always re-apply manual spreads so changes are reflected immediately
+    await this.applyManualSpreads();
 
     const rates = Array.from(this.cache.values()).filter((r) => r.base === base);
 
@@ -200,6 +204,9 @@ export class RatesService {
       // Apply any active overrides on top
       await this.applyOverrides();
 
+      // Apply manual spreads from StoreRate DB
+      await this.applyManualSpreads();
+
       this.logger.log(`Refreshed ${quotes.length} rates from ${this.provider.name}`);
 
       return Array.from(this.cache.values());
@@ -228,6 +235,38 @@ export class RatesService {
   }
 
   // ─── Internal ──────────────────────────────────────────────
+
+  private async applyManualSpreads() {
+    const storeRates = await this.prisma.storeRate.findMany({
+      where: {
+        OR: [
+          { mid: { gt: 0 } },
+          { spreadPercent: { gt: 0 } },
+          { spreadFixed: { gt: 0 } },
+          { buyMargin: { gt: 0 } },
+          { sellMargin: { gt: 0 } },
+        ],
+      },
+    });
+
+    for (const sr of storeRates) {
+      const key = `${sr.base}/${sr.quote}`;
+      const existing = this.cache.get(key);
+      if (!existing) continue;
+
+      const mid = Number(sr.mid) > 0 ? Number(sr.mid) : existing.mid;
+      const config = spreadConfigFromRow(sr);
+      const { bid, ask, spread } = computeBidAsk(mid, config, sr.quote);
+
+      this.cache.set(key, {
+        ...existing,
+        mid,
+        bid,
+        ask,
+        spread,
+      });
+    }
+  }
 
   private async applyOverrides() {
     const overrides = await this.prisma.manualOverride.findMany({

@@ -8,20 +8,15 @@ export interface PairMeta {
 }
 
 export const SUPPORTED_PAIRS: PairMeta[] = [
-  { base: 'USD', quote: 'EUR', label: 'USD/EUR', quoteName: 'European Union Euro', type: 'fiat' },
-  { base: 'USD', quote: 'CNY', label: 'USD/CNY', quoteName: 'Chinese Yuan', type: 'fiat' },
   { base: 'USD', quote: 'BRL', label: 'USD/BRL', quoteName: 'Brazilian Real', type: 'fiat' },
+  { base: 'USD', quote: 'CNY', label: 'USD/CNY', quoteName: 'Chinese Yuan', type: 'fiat' },
+  { base: 'USD', quote: 'EUR', label: 'USD/EUR', quoteName: 'European Union Euro', type: 'fiat' },
   { base: 'USD', quote: 'PYG', label: 'USD/PYG', quoteName: 'Paraguayan Guarani', type: 'fiat' },
+  { base: 'USD', quote: 'USDT', label: 'USD/USDT', quoteName: 'Tether Stablecoin', type: 'crypto' },
   { base: 'USD', quote: 'AED', label: 'USD/AED', quoteName: 'UAE Dirham', type: 'fiat' },
   { base: 'USD', quote: 'ARS', label: 'USD/ARS', quoteName: 'Argentine Peso', type: 'fiat' },
-  { base: 'USD', quote: 'GBP', label: 'USD/GBP', quoteName: 'British Pound', type: 'fiat' },
-  { base: 'USD', quote: 'JPY', label: 'USD/JPY', quoteName: 'Japanese Yen', type: 'fiat' },
-  { base: 'USD', quote: 'CHF', label: 'USD/CHF', quoteName: 'Swiss Franc', type: 'fiat' },
-  { base: 'USD', quote: 'CAD', label: 'USD/CAD', quoteName: 'Canadian Dollar', type: 'fiat' },
-  { base: 'USD', quote: 'AUD', label: 'USD/AUD', quoteName: 'Australian Dollar', type: 'fiat' },
-  { base: 'USD', quote: 'USDT', label: 'USD/USDT', quoteName: 'Tether Stablecoin', type: 'crypto' },
   { base: 'USD', quote: 'XAU', label: 'XAU/USD', quoteName: 'Spot Gold / Troy Ounce', type: 'commodity' },
-  { base: 'USD', quote: 'LBP', label: 'USD/LBP', quoteName: 'Lebanese Pound', type: 'fiat' },
+  { base: 'USD', quote: 'XAUG', label: 'XAUG/USD', quoteName: 'Gold / Gram', type: 'commodity' },
 ];
 
 /** Troy ounce to grams conversion factor */
@@ -52,4 +47,4 @@ export type StoreRateMode = 'AUTO_AVG' | 'MANUAL_SOURCE' | 'CUSTOM_VALUE' | 'LOC
 export const OUTLIER_THRESHOLD_PCT = 15;
 
 /** Multi-source target currencies (what we fetch from external sources) */
-export const MULTI_SOURCE_QUOTES = ['EUR', 'CNY', 'BRL', 'PYG', 'AED', 'ARS', 'LBP', 'XAU', 'USDT'];
+export const MULTI_SOURCE_QUOTES = ['BRL', 'CNY', 'EUR', 'PYG', 'USDT', 'AED', 'ARS', 'XAU'];

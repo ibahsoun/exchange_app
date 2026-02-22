@@ -11,7 +11,7 @@ import {
   ChevronsRight,
   Activity,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { cn, formatRate, formatAmount } from '@/lib/utils';
 import { TableRowSkeleton } from '@/components/Skeleton';
 import { transactionsApi } from '@/lib/api';
 import type { Transaction } from '@exchange/shared';
@@ -29,16 +29,6 @@ const AVATAR_COLORS = [
 // ─── Helpers ────────────────────────────────────────────────
 function getInitials(name: string) {
   return name.split(' ').map((w) => w[0]).join('').toUpperCase().slice(0, 2);
-}
-
-function formatAmount(n: number): string {
-  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-function formatRate(n: number): string {
-  if (n >= 100) return n.toFixed(2);
-  if (n >= 1) return n.toFixed(4);
-  return n.toFixed(6);
 }
 
 function formatDate(iso: string) {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Bell, HelpCircle, Moon, Shield, Sun } from 'lucide-react';
+import { Moon, Sun } from 'lucide-react';
 import { useRatesConnected } from '@/hooks/useRates';
 import { useTheme } from '@/contexts/ThemeContext';
 
@@ -49,16 +49,6 @@ export function Header() {
           </span>
         </div>
 
-        {/* Divider */}
-        <div className="divider-v mx-3" />
-
-        {/* Mode pill */}
-        <div className="flex items-center gap-1.5 bg-status-blue-subtle border border-status-blue/20 rounded-full px-3.5 py-1 ml-1">
-          <Shield className="w-3 h-3 text-status-blue" />
-          <span className="text-[11px] font-bold text-status-blue tracking-wide uppercase">
-            Standard Teller Mode
-          </span>
-        </div>
       </div>
 
       {/* ── Right cluster ─────────────────────────────── */}
@@ -84,17 +74,6 @@ export function Header() {
           )}
         </button>
 
-        {/* Notifications */}
-        <button className="relative p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-terminal-surface transition-colors">
-          <Bell className="w-[18px] h-[18px]" />
-          {/* Unread dot */}
-          <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-status-red" />
-        </button>
-
-        {/* Help */}
-        <button className="p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-terminal-surface transition-colors ml-1">
-          <HelpCircle className="w-[18px] h-[18px]" />
-        </button>
       </div>
     </header>
   );

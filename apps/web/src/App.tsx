@@ -7,6 +7,7 @@ import { CustomersPage } from './pages/Customers';
 import { SettlementTermsPage } from './pages/SettlementTerms';
 import { MarginsPage } from './pages/Margins';
 import { SettingsPage } from './pages/Settings';
+import { SpreadSettingsPage } from './pages/SpreadSettings';
 
 export function App() {
   return (
@@ -17,6 +18,7 @@ export function App() {
         <Route path="/live-rates" element={<LiveRatesPage />} />
         <Route path="/transactions" element={<TransactionsPage />} />
         <Route path="/customers" element={<CustomersPage />} />
+        <Route path="/spread-settings" element={<SpreadSettingsPage />} />
         <Route path="/settlement-terms" element={<SettlementTermsPage />} />
         <Route path="/margins" element={<MarginsPage />} />
         <Route path="/settings" element={<SettingsPage />} />

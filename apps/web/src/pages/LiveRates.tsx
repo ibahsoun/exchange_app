@@ -9,8 +9,8 @@ import {
   ChevronDown,
   Info,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
-import { multiSourceApi, type MultiSourceBoardResponse, type BoardRow, type SourceStatus } from '@/lib/api';
+import { cn, formatRate } from '@/lib/utils';
+import { multiSourceApi, spreadApi, type MultiSourceBoardResponse, type BoardRow, type SourceStatus, type SpreadType, type SpreadMode, type FixedUnit } from '@/lib/api';
 
 // ─── Cache key ───────────────────────────────────────────────
 const CACHE_KEY = 'live-rates-board';
@@ -33,13 +33,6 @@ function writeCache(data: MultiSourceBoardResponse) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────
-
-function formatRate(n: number): string {
-  if (n === 0) return '—';
-  if (n >= 1000) return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (n >= 1) return n.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 });
-  return n.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 6 });
-}
 
 function timeAgo(ts: string): string {
   if (!ts) return '—';
@@ -103,17 +96,37 @@ const ComparisonRow = memo(function ComparisonRow({
   sources,
   prevMid,
   onModeChange,
+  onSpreadChange,
 }: {
   row: BoardRow;
   sources: SourceStatus[];
   prevMid?: number;
   onModeChange: (quote: string, mode: string, mid?: number, sourceHint?: string) => void;
+  onSpreadChange: (quote: string, spreadType: SpreadType, spreadMode: SpreadMode, fixedUnit: FixedUnit, values: { spreadPercent?: number; spreadFixed?: number; buyMargin?: number; sellMargin?: number }) => void;
 }) {
   const rowRef = useRef<HTMLTableRowElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [modeOpen, setModeOpen] = useState(false);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [customValue, setCustomValue] = useState('');
+  const [localSpreadType, setLocalSpreadType] = useState<SpreadType>(row.storeRate.spreadType || 'PERCENTAGE');
+  const [localSpreadMode, setLocalSpreadMode] = useState<SpreadMode>(row.storeRate.spreadMode || 'SYMMETRIC');
+  const [localFixedUnit, setLocalFixedUnit] = useState<FixedUnit>(row.storeRate.fixedUnit || 'RAW');
+  const [localPercent, setLocalPercent] = useState(String(row.storeRate.spreadPercent || ''));
+  const [localFixed, setLocalFixed] = useState(String(row.storeRate.spreadFixed || ''));
+  const [localBuy, setLocalBuy] = useState(String(row.storeRate.buyMargin || ''));
+  const [localSell, setLocalSell] = useState(String(row.storeRate.sellMargin || ''));
+  const [spreadDirty, setSpreadDirty] = useState(false);
+
+  const saveSpread = () => {
+    onSpreadChange(row.quote, localSpreadType, localSpreadMode, localFixedUnit, {
+      spreadPercent: parseFloat(localPercent) || 0,
+      spreadFixed: parseFloat(localFixed) || 0,
+      buyMargin: parseFloat(localBuy) || 0,
+      sellMargin: parseFloat(localSell) || 0,
+    });
+    setSpreadDirty(false);
+  };
 
   // Flash on mid change
   useEffect(() => {
@@ -317,6 +330,81 @@ const ComparisonRow = memo(function ComparisonRow({
           </div>
         </div>
       </td>
+
+      {/* Spread controls */}
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <select
+            value={`${localSpreadType}_${localSpreadMode}`}
+            onChange={(e) => {
+              const [t, m] = e.target.value.split('_') as [SpreadType, SpreadMode];
+              setLocalSpreadType(t);
+              setLocalSpreadMode(m);
+              setSpreadDirty(true);
+            }}
+            className="appearance-none bg-terminal-surface-2 border border-terminal-border rounded px-1.5 py-1 text-xxs font-semibold text-text-primary outline-none focus:border-primary cursor-pointer"
+          >
+            <option value="PERCENTAGE_SYMMETRIC">% Sym</option>
+            <option value="PERCENTAGE_ASYMMETRIC">% Asym</option>
+            <option value="FIXED_SYMMETRIC">Fix Sym</option>
+            <option value="FIXED_ASYMMETRIC">Fix Asym</option>
+          </select>
+          {localSpreadMode === 'SYMMETRIC' ? (
+            <input
+              type="number"
+              step="any"
+              min="0"
+              placeholder="0"
+              value={localSpreadType === 'PERCENTAGE' ? localPercent : localFixed}
+              onChange={(e) => {
+                if (localSpreadType === 'PERCENTAGE') setLocalPercent(e.target.value);
+                else setLocalFixed(e.target.value);
+                setSpreadDirty(true);
+              }}
+              onKeyDown={(e) => { if (e.key === 'Enter') saveSpread(); }}
+              className="w-16 bg-terminal-surface-2 border border-terminal-border rounded px-2 py-1 text-[12px] font-mono text-text-primary outline-none focus:border-primary"
+            />
+          ) : (
+            <>
+              <input
+                type="number"
+                step="any"
+                min="0"
+                placeholder="B"
+                title="Buy margin"
+                value={localBuy}
+                onChange={(e) => { setLocalBuy(e.target.value); setSpreadDirty(true); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveSpread(); }}
+                className="w-14 bg-terminal-surface-2 border border-terminal-border rounded px-1.5 py-1 text-[12px] font-mono text-text-primary outline-none focus:border-primary"
+              />
+              <input
+                type="number"
+                step="any"
+                min="0"
+                placeholder="S"
+                title="Sell margin"
+                value={localSell}
+                onChange={(e) => { setLocalSell(e.target.value); setSpreadDirty(true); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') saveSpread(); }}
+                className="w-14 bg-terminal-surface-2 border border-terminal-border rounded px-1.5 py-1 text-[12px] font-mono text-text-primary outline-none focus:border-primary"
+              />
+            </>
+          )}
+          {spreadDirty && (
+            <button
+              onClick={saveSpread}
+              className="px-2 py-1 bg-primary text-white text-xxs rounded font-semibold hover:bg-primary-hover transition-colors"
+            >
+              Save
+            </button>
+          )}
+        </div>
+        {row.storeRate.spread > 0 && (
+          <div className="text-xs text-text-muted mt-1.5 font-mono">
+            B: {formatRate(row.storeRate.bid)} / A: {formatRate(row.storeRate.ask)}
+          </div>
+        )}
+      </td>
     </tr>
   );
 });
@@ -429,6 +517,24 @@ export function LiveRatesPage() {
       console.error('Failed to force refresh:', err);
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const handleSpreadChange = async (
+    quote: string,
+    spreadType: SpreadType,
+    spreadMode: SpreadMode,
+    fixedUnit: FixedUnit,
+    values: { spreadPercent?: number; spreadFixed?: number; buyMargin?: number; sellMargin?: number },
+  ) => {
+    setUpdating(true);
+    try {
+      await spreadApi.update({ base: 'USD', quote, spreadType, spreadMode, fixedUnit, ...values });
+      await fetchBoard();
+    } catch (err) {
+      console.error('Failed to update spread:', err);
+    } finally {
+      setUpdating(false);
     }
   };
 
@@ -676,6 +782,7 @@ export function LiveRatesPage() {
                   </th>
                 ))}
                 <th className="table-header text-left px-3 py-3 min-w-[180px]">Store Rate</th>
+                <th className="table-header text-left px-3 py-3 min-w-[240px]">Spread</th>
               </tr>
             </thead>
             <tbody>
@@ -686,12 +793,13 @@ export function LiveRatesPage() {
                   sources={sources}
                   prevMid={prevMidsRef.current.get(row.quote)}
                   onModeChange={handleModeChange}
+                  onSpreadChange={handleSpreadChange}
                 />
               ))}
               {filteredRows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={sources.length + 2}
+                    colSpan={sources.length + 3}
                     className="px-5 py-10 text-center text-text-muted text-sm"
                   >
                     {search ? `No pairs matching "${search}"` : 'No data available'}
@@ -708,6 +816,7 @@ export function LiveRatesPage() {
           <span>
             Rates are fetched from {sources.length} external source{sources.length !== 1 ? 's' : ''}.
             Use the <strong className="text-text-primary">Store Rate</strong> dropdown to override pricing per pair.
+            {' '}<strong className="text-text-primary">Percentage</strong>: offset by % of mid. <strong className="text-text-primary">Fixed</strong>: offset by fixed amount. <strong className="text-text-primary">Asymmetric</strong>: separate buy/sell margins. Customer receives the Bid rate when selling USD.
           </span>
         </div>
       </div>

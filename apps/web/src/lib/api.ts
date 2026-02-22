@@ -18,7 +18,11 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`POST ${path} failed: ${res.status}`);
+  if (!res.ok) {
+    let msg = `POST ${path} failed: ${res.status}`;
+    try { const body = await res.json(); if (body.message) msg = body.message; } catch { /* ignore */ }
+    throw new Error(msg);
+  }
   return res.json();
 }
 
@@ -46,6 +50,10 @@ export const transactionsApi = {
 };
 
 // ─── Multi-Source Rates ────────────────────────────────────
+
+export type SpreadType = 'PERCENTAGE' | 'FIXED';
+export type SpreadMode = 'SYMMETRIC' | 'ASYMMETRIC';
+export type FixedUnit = 'RAW' | 'PIPS';
 
 export interface SourceStatus {
   key: string;
@@ -75,8 +83,39 @@ export interface BoardRow {
     mode: 'AUTO_AVG' | 'MANUAL_SOURCE' | 'CUSTOM_VALUE' | 'LOCKED';
     sourceHint: string | null;
     label: string;
+    spreadType: SpreadType;
+    spreadMode: SpreadMode;
+    fixedUnit: FixedUnit;
+    spreadPercent: number;
+    spreadFixed: number;
+    buyMargin: number;
+    sellMargin: number;
+    bid: number;
+    ask: number;
+    spread: number;
   };
   variance: { points: number; direction: 'tight' | 'wide' | 'normal' };
+}
+
+export interface SpreadRow {
+  base: string;
+  quote: string;
+  pair: string;
+  quoteName: string;
+  mid: number;
+  mode: string;
+  sourceHint: string | null;
+  spreadType: SpreadType;
+  spreadMode: SpreadMode;
+  fixedUnit: FixedUnit;
+  spreadPercent: number;
+  spreadFixed: number;
+  buyMargin: number;
+  sellMargin: number;
+  bid: number;
+  ask: number;
+  spread: number;
+  updatedAt: string;
 }
 
 export interface MultiSourceBoardResponse {
@@ -114,5 +153,28 @@ export const multiSourceApi = {
     mid?: number;
     sourceHint?: string;
     reason?: string;
+    spreadType?: SpreadType;
+    spreadMode?: SpreadMode;
+    fixedUnit?: FixedUnit;
+    spreadPercent?: number;
+    spreadFixed?: number;
+    buyMargin?: number;
+    sellMargin?: number;
   }) => post('/rates/store-rate', dto),
+};
+
+// ─── Spread Management ──────────────────────────────────
+export const spreadApi = {
+  getAll: () => get<SpreadRow[]>('/rates/spreads'),
+  update: (dto: {
+    base: string;
+    quote: string;
+    spreadType: SpreadType;
+    spreadMode: SpreadMode;
+    fixedUnit?: FixedUnit;
+    spreadPercent?: number;
+    spreadFixed?: number;
+    buyMargin?: number;
+    sellMargin?: number;
+  }) => post('/rates/spread', dto),
 };
