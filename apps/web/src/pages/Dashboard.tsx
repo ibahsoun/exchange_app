@@ -7,41 +7,66 @@ import {
   Activity,
   User,
   Search,
+  Eraser,
 } from 'lucide-react';
 import { cn, formatRate, formatAmount } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
-import { transactionsApi, customersApi, spreadApi, type SpreadRow } from '@/lib/api';
-
-// ─── Currency meta ──────────────────────────────────────────
-const CURRENCIES = [
-  { code: 'USD', name: 'US Dollar', symbol: '$' },
-  { code: 'CNY', name: 'Chinese Yuan', symbol: '¥' },
-  { code: 'BRL', name: 'Brazilian Real', symbol: 'R$' },
-  { code: 'EUR', name: 'Euro', symbol: '€' },
-  { code: 'PYG', name: 'Paraguayan Guarani', symbol: '₲' },
-  { code: 'USDT', name: 'Tether', symbol: '₮' },
-  { code: 'AED', name: 'Emirates Dirham', symbol: 'د' },
-  { code: 'ARS', name: 'Argentine Peso', symbol: '$' },
-  { code: 'XAU', name: 'Gold (Troy Oz)', symbol: 'Au' },
-  { code: 'XAUG', name: 'Gold (Gram)', symbol: 'Au' },
-] as const;
-
-const CURRENCY_COLORS: Record<string, string> = {
-  USD: 'bg-emerald-600',
-  EUR: 'bg-blue-500',
-  CNY: 'bg-amber-600',
-  ARS: 'bg-sky-700',
-  PYG: 'bg-red-700',
-  BRL: 'bg-green-600',
-  AED: 'bg-teal-600',
-  USDT: 'bg-emerald-500',
-  XAU: 'bg-yellow-500',
-  XAUG: 'bg-yellow-600',
-};
+import { transactionsApi, customersApi, currenciesApi, spreadApi, VALID_BASES, type SpreadRow, type Currency } from '@/lib/api';
 
 /** Generate a transaction reference */
 function generateRef() {
   return `TR-${Math.floor(10000 + Math.random() * 90000)}`;
+}
+
+function getStoredBase(): string {
+  try {
+    const v = localStorage.getItem('baseCurrency');
+    if (v && VALID_BASES.includes(v)) return v;
+  } catch { /* ignore */ }
+  return 'USD';
+}
+
+const DASHBOARD_FORM_KEY = 'exchange-dashboard-form';
+
+interface StoredDashboardForm {
+  payCurrency: string;
+  receiveCurrency: string;
+  payAmount: string;
+  receiveAmount: string;
+  editDirection: 'pay' | 'receive';
+  selectedCustomerId: string;
+}
+
+const DEFAULT_PAY = '1000.00';
+const DEFAULT_PAY_CURRENCY = 'USD';
+const DEFAULT_RECEIVE_CURRENCY = 'EUR';
+
+function getStoredDashboardForm(): StoredDashboardForm | null {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_FORM_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as unknown;
+    if (
+      data &&
+      typeof data === 'object' &&
+      typeof (data as StoredDashboardForm).payCurrency === 'string' &&
+      typeof (data as StoredDashboardForm).receiveCurrency === 'string' &&
+      typeof (data as StoredDashboardForm).payAmount === 'string' &&
+      typeof (data as StoredDashboardForm).receiveAmount === 'string' &&
+      ((data as StoredDashboardForm).editDirection === 'pay' ||
+        (data as StoredDashboardForm).editDirection === 'receive') &&
+      typeof (data as StoredDashboardForm).selectedCustomerId === 'string'
+    ) {
+      return data as StoredDashboardForm;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+function saveDashboardForm(form: StoredDashboardForm): void {
+  try {
+    localStorage.setItem(DASHBOARD_FORM_KEY, JSON.stringify(form));
+  } catch { /* ignore */ }
 }
 
 // ─── Types ──────────────────────────────────────────────────
@@ -57,20 +82,43 @@ interface FormErrors {
 export function DashboardPage() {
   const toast = useToast();
 
-  // ─── Exchange state ────────────────────────────────────
-  const [payCurrency, setPayCurrency] = useState('USD');
-  const [receiveCurrency, setReceiveCurrency] = useState('EUR');
-  const [payAmount, setPayAmount] = useState('1000.00');
-  const [receiveAmount, setReceiveAmount] = useState('');
-  const [editDirection, setEditDirection] = useState<'pay' | 'receive'>('pay');
+  // ─── Exchange state (restored from localStorage when navigating back) ─
+  const stored = getStoredDashboardForm();
+  const [payCurrency, setPayCurrency] = useState(
+    stored?.payCurrency ?? DEFAULT_PAY_CURRENCY,
+  );
+  const [receiveCurrency, setReceiveCurrency] = useState(
+    stored?.receiveCurrency ?? DEFAULT_RECEIVE_CURRENCY,
+  );
+  const [payAmount, setPayAmount] = useState(stored?.payAmount ?? DEFAULT_PAY);
+  const [receiveAmount, setReceiveAmount] = useState(
+    stored?.receiveAmount ?? '',
+  );
+  const [editDirection, setEditDirection] = useState<'pay' | 'receive'>(
+    stored?.editDirection ?? 'pay',
+  );
   const [payDropdownOpen, setPayDropdownOpen] = useState(false);
   const [receiveDropdownOpen, setReceiveDropdownOpen] = useState(false);
+
+  // ─── Currency list from backend ─────────────────────────
+  const [currencies, setCurrencies] = useState<Currency[]>([]);
+  const currencyColors = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const c of currencies) m[c.code] = c.color;
+    return m;
+  }, [currencies]);
+
+  useEffect(() => {
+    currenciesApi.list().then(setCurrencies).catch(console.error);
+  }, []);
 
   // ─── Customer list & selection ─────────────────────────
   const [customerList, setCustomerList] = useState<
     { id: string; name: string; customerId: string }[]
   >([]);
-  const [selectedCustomerId, setSelectedCustomerId] = useState('');
+  const [selectedCustomerId, setSelectedCustomerId] = useState(
+    stored?.selectedCustomerId ?? '',
+  );
   const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState('');
   const customerSearchRef = useRef<HTMLInputElement>(null);
@@ -90,17 +138,58 @@ export function DashboardPage() {
       .catch(console.error);
   }, []);
 
+  // Persist form state so it survives navigation
+  useEffect(() => {
+    saveDashboardForm({
+      payCurrency,
+      receiveCurrency,
+      payAmount,
+      receiveAmount,
+      editDirection,
+      selectedCustomerId,
+    });
+  }, [
+    payCurrency,
+    receiveCurrency,
+    payAmount,
+    receiveAmount,
+    editDirection,
+    selectedCustomerId,
+  ]);
+
   // ─── UI state ──────────────────────────────────────────
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitted, setSubmitted] = useState(false);
   const [ref] = useState(generateRef);
 
+  // ─── Base currency (shared with LiveRates via localStorage) ─
+  const [baseCurrency, setBaseCurrency] = useState(getStoredBase);
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'baseCurrency' && e.newValue && VALID_BASES.includes(e.newValue)) {
+        setBaseCurrency(e.newValue);
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
   // ─── Pricing from backend (single source of truth) ─
   const [pricing, setPricing] = useState<SpreadRow[]>([]);
 
+  const fetchPricing = useCallback(() => {
+    spreadApi.getAll(baseCurrency).then(setPricing).catch(console.error);
+  }, [baseCurrency]);
+
+  useEffect(() => { fetchPricing(); }, [fetchPricing]);
+
+  // Re-fetch pricing when page regains focus (e.g. after editing Spread Settings)
   useEffect(() => {
-    spreadApi.getAll().then(setPricing).catch(console.error);
-  }, []);
+    const onFocus = () => fetchPricing();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [fetchPricing]);
 
   // Lookup returns backend-computed bid/ask/mid — no frontend spread math
   const pricingMap = useMemo(() => {
@@ -109,49 +198,89 @@ export function DashboardPage() {
     return m;
   }, [pricing]);
 
+  // Rounding helper: apply per-pair rounding to a value
+  const applyRounding = useCallback((value: number, currency: string): number => {
+    const cfg = pricingMap.get(currency);
+    if (!cfg || cfg.roundingDecimals == null || !cfg.roundingMode) return value;
+    const factor = Math.pow(10, cfg.roundingDecimals);
+    if (cfg.roundingMode === 'FLOOR') return Math.floor(value * factor) / factor;
+    return Math.ceil(value * factor) / factor;
+  }, [pricingMap]);
+
+  // Format rate respecting per-pair rounding decimals
+  const fmtRate = useCallback((value: number, currency: string): string => {
+    const cfg = pricingMap.get(currency);
+    if (cfg?.roundingDecimals != null) {
+      return value.toLocaleString('en-US', { minimumFractionDigits: cfg.roundingDecimals, maximumFractionDigits: cfg.roundingDecimals });
+    }
+    return formatRate(value);
+  }, [pricingMap]);
+
+  // Format amount respecting per-pair rounding decimals
+  const fmtAmount = useCallback((value: number, currency: string): string => {
+    const cfg = pricingMap.get(currency);
+    if (cfg?.roundingDecimals != null) {
+      return value.toLocaleString('en-US', { minimumFractionDigits: cfg.roundingDecimals, maximumFractionDigits: cfg.roundingDecimals });
+    }
+    return formatAmount(value);
+  }, [pricingMap]);
+
   // ─── Bidirectional conversion ──────────────────────
   const conversionResult = useMemo(() => {
     const sourceAmount = editDirection === 'pay' ? payAmount : receiveAmount;
     const amount = parseFloat(sourceAmount);
     if (isNaN(amount) || amount <= 0) return null;
     if (payCurrency === receiveCurrency)
-      return { rate: 1, midRate: 1, rateLabel: 'bid' as const, computedPay: amount, computedReceive: amount };
+      return { rate: 1, midRate: 1, bidRate: 1, askRate: 1, rateLabel: 'bid' as const, computedPay: amount, computedReceive: amount };
 
-    // All rates are USD/QUOTE (how many QUOTE per 1 USD).
+    // All rates are BASE/QUOTE (how many QUOTE per 1 BASE).
+    // BASE is the selected baseCurrency (default USD).
     // bid/ask/mid come pre-computed from backend using the same
     // storeRate + spreadConfig as LiveRates and SpreadSettings.
-    const USD: Pick<SpreadRow, 'bid' | 'ask' | 'mid'> = { bid: 1, ask: 1, mid: 1 };
-    const payPricing = payCurrency === 'USD' ? USD : pricingMap.get(payCurrency);
-    const recvPricing = receiveCurrency === 'USD' ? USD : pricingMap.get(receiveCurrency);
+    const BASE_UNIT: Pick<SpreadRow, 'bid' | 'ask' | 'mid'> = { bid: 1, ask: 1, mid: 1 };
+    const payPricing = payCurrency === baseCurrency ? BASE_UNIT : pricingMap.get(payCurrency);
+    const recvPricing = receiveCurrency === baseCurrency ? BASE_UNIT : pricingMap.get(receiveCurrency);
     if (!payPricing || !recvPricing) return null;
 
     // "Customer pays X" = customer SELLS X to us.
-    //   When selling USD  → quote rate bid  (customer gets fewer QUOTE)
-    //   When selling QUOTE → quote rate ask  (customer gives more QUOTE per USD)
+    //   When selling BASE → quote rate bid  (customer gets fewer QUOTE)
+    //   When selling QUOTE → quote rate ask  (customer gives more QUOTE per BASE)
 
     let computedPay: number;
     let computedReceive: number;
 
     if (editDirection === 'pay') {
-      const usdAmount = payCurrency === 'USD' ? amount : amount / payPricing.ask;
-      computedReceive = receiveCurrency === 'USD' ? usdAmount : usdAmount * recvPricing.bid;
+      const baseAmount = payCurrency === baseCurrency ? amount : amount / payPricing.ask;
+      computedReceive = receiveCurrency === baseCurrency ? baseAmount : baseAmount * recvPricing.bid;
+      computedReceive = applyRounding(computedReceive, receiveCurrency);
       computedPay = amount;
     } else {
-      const usdAmount = receiveCurrency === 'USD' ? amount : amount / recvPricing.bid;
-      computedPay = payCurrency === 'USD' ? usdAmount : usdAmount * payPricing.ask;
+      const baseAmount = receiveCurrency === baseCurrency ? amount : amount / recvPricing.bid;
+      computedPay = payCurrency === baseCurrency ? baseAmount : baseAmount * payPricing.ask;
+      computedPay = applyRounding(computedPay, payCurrency);
       computedReceive = amount;
     }
 
-    // Mid-rate for display: 1 PAY → midPay USD → midPay × midRecv RECV
-    const midPay = payCurrency === 'USD' ? 1 : 1 / payPricing.mid;
-    const midRecv = receiveCurrency === 'USD' ? 1 : recvPricing.mid;
+    // Mid-rate for display: 1 PAY → midPay BASE → midPay × midRecv RECV
+    const midPay = payCurrency === baseCurrency ? 1 : 1 / payPricing.mid;
+    const midRecv = receiveCurrency === baseCurrency ? 1 : recvPricing.mid;
     const midRate = midPay * midRecv;
 
-    const customerRate = computedReceive / computedPay;
-    const rateLabel: 'bid' | 'ask' = payCurrency === 'USD' ? 'bid' : 'ask';
+    // Bid rate: 1 PAY → RECV using bid prices
+    const bidRate =
+      (payCurrency === baseCurrency ? 1 : 1 / payPricing.bid) *
+      (receiveCurrency === baseCurrency ? 1 : recvPricing.bid);
 
-    return { rate: customerRate, midRate, rateLabel, computedPay, computedReceive };
-  }, [payAmount, receiveAmount, editDirection, payCurrency, receiveCurrency, pricingMap]);
+    // Ask rate: 1 PAY → RECV using ask prices
+    const askRate =
+      (payCurrency === baseCurrency ? 1 : 1 / payPricing.ask) *
+      (receiveCurrency === baseCurrency ? 1 : recvPricing.ask);
+
+    const customerRate = computedReceive / computedPay;
+    const rateLabel: 'bid' | 'ask' = payCurrency === baseCurrency ? 'bid' : 'ask';
+
+    return { rate: customerRate, midRate, bidRate, askRate, rateLabel, computedPay, computedReceive };
+  }, [payAmount, receiveAmount, editDirection, payCurrency, receiveCurrency, baseCurrency, pricingMap, applyRounding]);
 
   // ─── Swap currencies ──────────────────────────────────
   const handleSwap = useCallback(() => {
@@ -159,13 +288,13 @@ export function DashboardPage() {
     setReceiveCurrency(payCurrency);
     // Swap the amounts and flip direction
     setPayAmount(
-      receiveAmount || (conversionResult ? formatAmount(conversionResult.computedReceive) : ''),
+      receiveAmount || (conversionResult ? fmtAmount(conversionResult.computedReceive, receiveCurrency) : ''),
     );
     setReceiveAmount(
-      payAmount || (conversionResult ? formatAmount(conversionResult.computedPay) : ''),
+      payAmount || (conversionResult ? fmtAmount(conversionResult.computedPay, payCurrency) : ''),
     );
     setErrors((e) => ({ ...e, currencies: undefined }));
-  }, [payCurrency, receiveCurrency, payAmount, receiveAmount, conversionResult]);
+  }, [payCurrency, receiveCurrency, payAmount, receiveAmount, conversionResult, fmtAmount]);
 
   // ─── Validate ─────────────────────────────────────────
   const validate = useCallback((): boolean => {
@@ -240,6 +369,17 @@ export function DashboardPage() {
     setEditDirection('receive');
     if (errors.amount) setErrors((e) => ({ ...e, amount: undefined }));
   };
+
+  const handleClear = useCallback(() => {
+    setPayCurrency(DEFAULT_PAY_CURRENCY);
+    setReceiveCurrency(DEFAULT_RECEIVE_CURRENCY);
+    setPayAmount(DEFAULT_PAY);
+    setReceiveAmount('');
+    setEditDirection('pay');
+    setSelectedCustomerId('');
+    setErrors({});
+    // Persist effect will save cleared state so it stays cleared when navigating back
+  }, []);
 
   return (
     <div className="flex gap-6">
@@ -393,7 +533,7 @@ export function DashboardPage() {
                       editDirection === 'pay'
                         ? payAmount
                         : conversionResult
-                          ? formatAmount(conversionResult.computedPay)
+                          ? fmtAmount(conversionResult.computedPay, payCurrency)
                           : '—'
                     }
                     onChange={(e) => handlePayAmountChange(e.target.value)}
@@ -421,6 +561,8 @@ export function DashboardPage() {
                     open={payDropdownOpen}
                     setOpen={setPayDropdownOpen}
                     side="right"
+                    currencies={currencies}
+                    colorMap={currencyColors}
                   />
                 </div>
                 {errors.amount && (
@@ -452,7 +594,7 @@ export function DashboardPage() {
                       editDirection === 'receive'
                         ? receiveAmount
                         : conversionResult
-                          ? formatAmount(conversionResult.computedReceive)
+                          ? fmtAmount(conversionResult.computedReceive, receiveCurrency)
                           : '—'
                     }
                     onChange={(e) => handleReceiveAmountChange(e.target.value)}
@@ -478,6 +620,8 @@ export function DashboardPage() {
                     open={receiveDropdownOpen}
                     setOpen={setReceiveDropdownOpen}
                     side="right"
+                    currencies={currencies}
+                    colorMap={currencyColors}
                   />
                 </div>
                 {errors.currencies && (
@@ -489,39 +633,57 @@ export function DashboardPage() {
             </div>
 
             {/* Rate & spread display */}
-            <div className="flex flex-col gap-1 px-1 text-sm">
+            <div className="flex flex-col gap-1.5 px-1 text-sm">
+              {/* Market rate (mid) */}
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Activity className="w-3.5 h-3.5 text-text-muted" />
-                  <span className="text-text-muted text-xs font-semibold">Market rate (mid)</span>
+                  <span className="text-text-muted text-xs font-semibold">Market rate</span>
                   <span className="text-text-muted font-mono text-[12px]">
                     {conversionResult
-                      ? `1 ${payCurrency} = ${formatRate(conversionResult.midRate)} ${receiveCurrency}`
+                      ? <>1 {payCurrency} = {fmtRate(conversionResult.midRate, receiveCurrency)} {receiveCurrency} <span className="inline-block mx-1.5 w-px h-3 bg-terminal-border align-middle" /> 1 {receiveCurrency} = {fmtRate(1 / conversionResult.midRate, payCurrency)} {payCurrency}</>
                       : '—'}
                   </span>
                 </div>
                 <span className="text-text-muted text-xs font-mono">
                   Spread: {(() => {
-                    const quote = receiveCurrency !== 'USD' ? receiveCurrency : payCurrency;
+                    const quote = receiveCurrency !== baseCurrency ? receiveCurrency : payCurrency;
                     const cfg = pricingMap.get(quote);
-                    if (!cfg || cfg.spread === 0) return '—';
+                    if (!cfg) return '—';
                     if (cfg.spreadType === 'FIXED') {
-                      if (cfg.spreadMode === 'ASYMMETRIC') return `B:${cfg.buyMargin} / S:${cfg.sellMargin} fix`;
+                      if (cfg.spreadMode === 'ASYMMETRIC') {
+                        if (cfg.buyMargin === 0 && cfg.sellMargin === 0) return '—';
+                        return `B:${cfg.buyMargin} / S:${cfg.sellMargin} fix`;
+                      }
+                      if (cfg.spreadFixed === 0) return '—';
                       return `${cfg.spreadFixed} fix`;
                     }
-                    if (cfg.spreadMode === 'ASYMMETRIC') return `B:${cfg.buyMargin}% / S:${cfg.sellMargin}%`;
+                    if (cfg.spreadMode === 'ASYMMETRIC') {
+                      if (cfg.buyMargin === 0 && cfg.sellMargin === 0) return '—';
+                      return `B:${cfg.buyMargin}% / S:${cfg.sellMargin}%`;
+                    }
+                    if (cfg.spreadPercent === 0) return '—';
                     return `${cfg.spreadPercent}%`;
                   })()}
                 </span>
               </div>
+              {/* Customer rate (bid) */}
               <div className="flex items-center gap-2">
                 <Activity className="w-3.5 h-3.5 text-status-green" />
-                <span className="text-text-primary text-xs font-semibold">
-                  Customer rate ({conversionResult?.rateLabel ?? 'bid'})
-                </span>
-                <span className="text-text-primary font-mono font-medium text-[13px]">
+                <span className="text-text-primary text-xs font-semibold">Customer rate (bid)</span>
+                <span className="text-text-primary font-mono font-medium text-[12px]">
                   {conversionResult
-                    ? `1 ${payCurrency} = ${formatRate(conversionResult.rate)} ${receiveCurrency}`
+                    ? <>1 {payCurrency} = {fmtRate(conversionResult.bidRate, receiveCurrency)} {receiveCurrency} <span className="inline-block mx-1.5 w-px h-3 bg-terminal-border align-middle" /> 1 {receiveCurrency} = {fmtRate(1 / conversionResult.bidRate, payCurrency)} {payCurrency}</>
+                    : '—'}
+                </span>
+              </div>
+              {/* Customer rate (ask) */}
+              <div className="flex items-center gap-2">
+                <Activity className="w-3.5 h-3.5 text-amber-500" />
+                <span className="text-text-primary text-xs font-semibold">Customer rate (ask)</span>
+                <span className="text-text-primary font-mono font-medium text-[12px]">
+                  {conversionResult
+                    ? <>1 {payCurrency} = {fmtRate(conversionResult.askRate, receiveCurrency)} {receiveCurrency} <span className="inline-block mx-1.5 w-px h-3 bg-terminal-border align-middle" /> 1 {receiveCurrency} = {fmtRate(1 / conversionResult.askRate, payCurrency)} {payCurrency}</>
                     : '—'}
                 </span>
               </div>
@@ -529,18 +691,28 @@ export function DashboardPage() {
           </div>
         </div>
 
-        {/* ─── Process Transaction Button ────────────────── */}
-        <button
-          onClick={handleProcess}
-          disabled={submitted}
-          className={cn(
-            'w-full py-3.5 text-[15px] font-semibold flex items-center justify-center gap-2 rounded-terminal transition-all duration-150',
-            submitted ? 'bg-status-green text-white cursor-default' : 'btn-primary',
-          )}
-        >
-          <CheckCircle2 className="w-5 h-5" />
-          {submitted ? 'Transaction Submitted!' : 'Process Transaction'}
-        </button>
+        {/* ─── Clear & Process Transaction Buttons ───────── */}
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={handleClear}
+            className="flex-1 py-3.5 text-[15px] font-semibold flex items-center justify-center gap-2 rounded-terminal border border-terminal-border bg-terminal-surface text-text-secondary hover:bg-terminal-surface-2 hover:border-terminal-border/80 transition-all duration-150"
+          >
+            <Eraser className="w-5 h-5" />
+            Clear
+          </button>
+          <button
+            onClick={handleProcess}
+            disabled={submitted}
+            className={cn(
+              'flex-1 py-3.5 text-[15px] font-semibold flex items-center justify-center gap-2 rounded-terminal transition-all duration-150',
+              submitted ? 'bg-status-green text-white cursor-default' : 'btn-primary',
+            )}
+          >
+            <CheckCircle2 className="w-5 h-5" />
+            {submitted ? 'Transaction Submitted!' : 'Process Transaction'}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -553,12 +725,16 @@ function CurrencyDropdown({
   open,
   setOpen,
   side,
+  currencies,
+  colorMap,
 }: {
   value: string;
   onChange: (code: string) => void;
   open: boolean;
   setOpen: (v: boolean) => void;
   side: 'left' | 'right';
+  currencies: Currency[];
+  colorMap: Record<string, string>;
 }) {
   return (
     <div className="relative">
@@ -573,7 +749,7 @@ function CurrencyDropdown({
         <span
           className={cn(
             'w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold',
-            CURRENCY_COLORS[value] ?? 'bg-gray-600',
+            colorMap[value] ?? 'bg-gray-600',
           )}
         >
           {value.slice(0, 2)}
@@ -591,7 +767,7 @@ function CurrencyDropdown({
           {/* Dropdown */}
           <div className="absolute top-full mt-1 right-0 z-50 w-52 bg-terminal-card border border-terminal-border rounded-lg shadow-terminal-lg overflow-hidden">
             <div className="max-h-64 overflow-y-auto">
-              {CURRENCIES.map((c) => (
+              {currencies.map((c) => (
                 <button
                   key={c.code}
                   type="button"
@@ -607,7 +783,7 @@ function CurrencyDropdown({
                   <span
                     className={cn(
                       'w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold',
-                      CURRENCY_COLORS[c.code] ?? 'bg-gray-600',
+                      colorMap[c.code] ?? 'bg-gray-600',
                     )}
                   >
                     {c.code.slice(0, 2)}

@@ -361,6 +361,28 @@ async function main() {
     console.log('  ✓ 12 transactions');
   }
 
+  // ─── Currencies ────────────────────────────────────────
+  const defaultCurrencies = [
+    { code: 'USD', name: 'US Dollar', symbol: '$', color: 'bg-emerald-600', sortIndex: 0 },
+    { code: 'CNY', name: 'Chinese Yuan', symbol: '¥', color: 'bg-amber-600', sortIndex: 1 },
+    { code: 'BRL', name: 'Brazilian Real', symbol: 'R$', color: 'bg-green-600', sortIndex: 2 },
+    { code: 'EUR', name: 'Euro', symbol: '€', color: 'bg-blue-500', sortIndex: 3 },
+    { code: 'PYG', name: 'Paraguayan Guarani', symbol: '₲', color: 'bg-red-700', sortIndex: 4 },
+    { code: 'USDT', name: 'Tether', symbol: '₮', color: 'bg-emerald-500', sortIndex: 5 },
+    { code: 'AED', name: 'Emirates Dirham', symbol: 'د', color: 'bg-teal-600', sortIndex: 6 },
+    { code: 'ARS', name: 'Argentine Peso', symbol: '$', color: 'bg-sky-700', sortIndex: 7 },
+    { code: 'XAU', name: 'Gold (Troy Oz)', symbol: 'Au', color: 'bg-yellow-500', sortIndex: 8 },
+    { code: 'XAUG', name: 'Gold (Gram)', symbol: 'Au', color: 'bg-yellow-600', sortIndex: 9 },
+  ];
+  for (const curr of defaultCurrencies) {
+    await prisma.currency.upsert({
+      where: { code: curr.code },
+      update: { name: curr.name, symbol: curr.symbol, color: curr.color, sortIndex: curr.sortIndex },
+      create: curr,
+    });
+  }
+  console.log(`  ✓ ${defaultCurrencies.length} currencies`);
+
   // ─── Rate Source (mock) ─────────────────────────────────
   await prisma.rateSource.upsert({
     where: { name: 'mock' },

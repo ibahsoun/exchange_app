@@ -1,6 +1,7 @@
 export type SpreadType = 'PERCENTAGE' | 'FIXED';
 export type SpreadMode = 'SYMMETRIC' | 'ASYMMETRIC';
 export type FixedUnit = 'RAW' | 'PIPS';
+export type RoundingMode = 'FLOOR' | 'CEIL';
 
 export interface SpreadConfig {
   spreadType: SpreadType;
@@ -42,6 +43,22 @@ export function pipsToRaw(pips: number, quote: string): number {
 function resolveFixed(value: number, config: SpreadConfig, quote: string): number {
   if (config.fixedUnit === 'PIPS') return pipsToRaw(value, quote);
   return value;
+}
+
+export interface RoundingConfig {
+  decimals: number | null;
+  mode: RoundingMode | null;
+}
+
+/** Apply rounding to a value. Returns as-is if no rounding configured. */
+export function applyRounding(
+  value: number,
+  rounding?: RoundingConfig | null,
+): number {
+  if (!rounding || rounding.decimals == null || rounding.mode == null) return value;
+  const factor = Math.pow(10, rounding.decimals);
+  if (rounding.mode === 'FLOOR') return Math.floor(value * factor) / factor;
+  return Math.ceil(value * factor) / factor;
 }
 
 export interface BidAskResult {
@@ -96,6 +113,7 @@ export function computeBidAsk(
   mid: number,
   config: SpreadConfig,
   quote = '',
+  rounding?: RoundingConfig | null,
 ): BidAskResult {
   if (!mid) return { bid: mid, ask: mid, spread: 0 };
 
@@ -126,12 +144,15 @@ export function computeBidAsk(
     return { bid: mid, ask: mid, spread: 0 };
   }
 
-  const bid = mid - bidOffset;
-  const ask = mid + askOffset;
+  let bid = Number((mid - bidOffset).toPrecision(8));
+  let ask = Number((mid + askOffset).toPrecision(8));
+
+  bid = applyRounding(bid, rounding);
+  ask = applyRounding(ask, rounding);
 
   return {
-    bid: Number(bid.toPrecision(8)),
-    ask: Number(ask.toPrecision(8)),
+    bid,
+    ask,
     spread: Number((ask - bid).toPrecision(6)),
   };
 }

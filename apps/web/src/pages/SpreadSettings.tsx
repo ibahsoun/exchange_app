@@ -1,20 +1,17 @@
-import { useState, useEffect, useMemo } from 'react';
-import { SlidersHorizontal, RefreshCw, Check, Info, ChevronDown, AlertTriangle } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { SlidersHorizontal, RefreshCw, Check, Info, ChevronDown } from 'lucide-react';
 import { cn, formatRate } from '@/lib/utils';
-import { spreadApi, type SpreadRow, type SpreadType, type SpreadMode, type FixedUnit } from '@/lib/api';
-
-const PIP_SIZES: Record<string, number> = { JPY: 0.01, KRW: 0.01, HUF: 0.01 };
-function pipSize(quote: string) { return PIP_SIZES[quote] ?? 0.0001; }
-function pipsToRaw(pips: number, quote: string) { return pips * pipSize(quote); }
+import { spreadApi, type SpreadRow, type SpreadType, type SpreadMode } from '@/lib/api';
 
 interface LocalRow extends SpreadRow {
   localType: SpreadType;
   localMode: SpreadMode;
-  localUnit: FixedUnit;
   localPercent: string;
   localFixed: string;
   localBuy: string;
   localSell: string;
+  localRoundingDecimals: string;
+  localRoundingMode: string;
   dirty: boolean;
   saving: boolean;
   saved: boolean;
@@ -26,11 +23,12 @@ function rowFromData(r: SpreadRow): LocalRow {
     ...r,
     localType: r.spreadType || 'PERCENTAGE',
     localMode: r.spreadMode || 'SYMMETRIC',
-    localUnit: r.fixedUnit || 'RAW',
     localPercent: String(r.spreadPercent || ''),
     localFixed: String(r.spreadFixed || ''),
     localBuy: String(r.buyMargin || ''),
     localSell: String(r.sellMargin || ''),
+    localRoundingDecimals: r.roundingDecimals != null ? String(r.roundingDecimals) : '',
+    localRoundingMode: r.roundingMode || 'FLOOR',
     dirty: false,
     saving: false,
     saved: false,
@@ -60,14 +58,12 @@ function validateRow(row: LocalRow): string | null {
   if (row.localMode === 'SYMMETRIC') {
     const v = parseFloat(row.localFixed) || 0;
     if (v < 0) return 'Fixed spread cannot be negative.';
-    const raw = row.localUnit === 'PIPS' ? pipsToRaw(v, row.quote) : v;
-    if (raw >= 2 * mid) return `Fixed spread too large for mid=${formatRate(mid)}. Bid would be <= 0.`;
+    if (v >= 2 * mid) return `Fixed spread too large for mid=${formatRate(mid)}. Bid would be <= 0.`;
   } else {
     const b = parseFloat(row.localBuy) || 0;
     const s = parseFloat(row.localSell) || 0;
     if (b < 0 || s < 0) return 'Fixed offsets cannot be negative.';
-    const buyRaw = row.localUnit === 'PIPS' ? pipsToRaw(b, row.quote) : b;
-    if (buyRaw >= mid) return `Buy offset too large for mid=${formatRate(mid)}. Bid would be <= 0.`;
+    if (b >= mid) return `Buy offset too large for mid=${formatRate(mid)}. Bid would be <= 0.`;
   }
   return null;
 }
@@ -114,16 +110,19 @@ export function SpreadSettingsPage() {
     setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, saving: true } : r)));
 
     try {
+      const roundingDecimals = row.localRoundingDecimals !== '' ? parseInt(row.localRoundingDecimals, 10) : null;
       await spreadApi.update({
         base: row.base,
         quote: row.quote,
         spreadType: row.localType,
         spreadMode: row.localMode,
-        fixedUnit: row.localUnit,
+        fixedUnit: 'RAW',
         spreadPercent,
         spreadFixed,
         buyMargin,
         sellMargin,
+        roundingDecimals,
+        roundingMode: roundingDecimals != null ? row.localRoundingMode : null,
       });
       const data = await spreadApi.getAll();
       setRows(data.map((r, i) => ({ ...rowFromData(r), saved: i === idx })));
@@ -192,6 +191,7 @@ export function SpreadSettingsPage() {
                 <th className="table-header text-left px-3 py-3">Spread Value</th>
                 <th className="table-header text-right px-3 py-3">Bid</th>
                 <th className="table-header text-right px-3 py-3">Ask</th>
+                <th className="table-header text-left px-3 py-3">Rounding</th>
                 <th className="table-header text-center px-3 py-3 w-20">Action</th>
               </tr>
             </thead>
@@ -200,7 +200,7 @@ export function SpreadSettingsPage() {
                 <SpreadRowCmp key={row.pair} row={row} onUpdate={(p) => update(idx, p)} onSave={() => handleSave(idx)} />
               ))}
               {rows.length === 0 && (
-                <tr><td colSpan={8} className="px-5 py-10 text-center text-text-muted text-sm">No pairs configured</td></tr>
+                <tr><td colSpan={9} className="px-5 py-10 text-center text-text-muted text-sm">No pairs configured</td></tr>
               )}
             </tbody>
           </table>
@@ -211,7 +211,6 @@ export function SpreadSettingsPage() {
           <span>
             <strong className="text-text-primary">Percentage</strong>: offset as % of mid.{' '}
             <strong className="text-text-primary">Fixed RAW</strong>: absolute offset in quote currency (e.g. EUR per 1 USD). Typical values: 0.0001–0.01.{' '}
-            <strong className="text-text-primary">Fixed PIPS</strong>: offset in pips (1 pip = {'{'}0.0001 for most FX{'}'}).{' '}
             <strong className="text-text-primary">Symmetric</strong>: equal both sides.{' '}
             <strong className="text-text-primary">Asymmetric</strong>: separate buy/sell margins.
           </span>
@@ -250,24 +249,14 @@ function SpreadRowCmp({ row, onUpdate, onSave }: {
   const isPercent = row.localType === 'PERCENTAGE';
   const isFixed = !isPercent;
   const isSymmetric = row.localMode === 'SYMMETRIC';
-  const isPips = row.localUnit === 'PIPS';
   const hasError = !!row.error;
+  const roundDec = row.roundingDecimals;
 
-  // Show RAW warning for non-LBP pairs using FIXED RAW
-  const showRawWarning = isFixed && !isPips && row.quote !== 'LBP';
-
-  // Computed effective value for PIPS display
-  const pipsPreview = useMemo(() => {
-    if (!isFixed || !isPips) return null;
-    if (isSymmetric) {
-      const v = parseFloat(row.localFixed) || 0;
-      return v > 0 ? `${v} pips = ${pipsToRaw(v, row.quote)} ${row.quote}` : null;
-    }
-    const b = parseFloat(row.localBuy) || 0;
-    const s = parseFloat(row.localSell) || 0;
-    if (b <= 0 && s <= 0) return null;
-    return `B: ${b}→${pipsToRaw(b, row.quote)} / S: ${s}→${pipsToRaw(s, row.quote)} ${row.quote}`;
-  }, [isFixed, isPips, isSymmetric, row.localFixed, row.localBuy, row.localSell, row.quote]);
+  const fmtBidAsk = (v: number) => {
+    if (!v) return '—';
+    if (roundDec != null) return v.toLocaleString('en-US', { minimumFractionDigits: roundDec, maximumFractionDigits: roundDec });
+    return formatRate(v);
+  };
 
   const inputBorderClass = hasError ? 'border-status-red' : 'border-terminal-border';
 
@@ -301,14 +290,7 @@ function SpreadRowCmp({ row, onUpdate, onSave }: {
             onChange={(v) => onUpdate({ localMode: v as SpreadMode })}
           />
           {isFixed && (
-            <MiniSelect
-              value={row.localUnit}
-              options={[
-                { value: 'RAW', label: 'RAW' },
-                { value: 'PIPS', label: 'PIPS' },
-              ]}
-              onChange={(v) => onUpdate({ localUnit: v as FixedUnit })}
-            />
+            <span className="text-xxs text-text-muted font-semibold px-1">RAW</span>
           )}
         </div>
       </td>
@@ -326,7 +308,7 @@ function SpreadRowCmp({ row, onUpdate, onSave }: {
                 className={cn('w-20 bg-terminal-surface-2 border rounded px-2 py-1 text-xs font-mono text-text-primary text-right outline-none focus:border-primary', inputBorderClass)}
               />
               <span className="text-xxs text-text-muted font-semibold">
-                {isPercent ? '%' : isPips ? 'pips' : row.quote}
+                {isPercent ? '%' : row.quote}
               </span>
             </div>
           ) : (
@@ -356,18 +338,9 @@ function SpreadRowCmp({ row, onUpdate, onSave }: {
                 />
               </div>
               <span className="text-xxs text-text-muted font-semibold">
-                {isPercent ? '%' : isPips ? 'pips' : row.quote}
+                {isPercent ? '%' : row.quote}
               </span>
             </div>
-          )}
-          {pipsPreview && (
-            <span className="text-xxs text-text-muted font-mono">{pipsPreview}</span>
-          )}
-          {showRawWarning && (
-            <span className="flex items-center gap-1 text-xxs text-status-yellow">
-              <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-              RAW = absolute {row.quote} units. Consider PIPS or %.
-            </span>
           )}
           {hasError && (
             <span className="text-xxs text-status-red font-semibold">{row.error}</span>
@@ -375,10 +348,35 @@ function SpreadRowCmp({ row, onUpdate, onSave }: {
         </div>
       </td>
       <td className="px-3 py-3 text-right font-mono text-[12px] text-text-primary">
-        {row.bid ? formatRate(row.bid) : '—'}
+        {fmtBidAsk(row.bid)}
       </td>
       <td className="px-3 py-3 text-right font-mono text-[12px] text-text-primary">
-        {row.ask ? formatRate(row.ask) : '—'}
+        {fmtBidAsk(row.ask)}
+      </td>
+      <td className="px-3 py-3">
+        <div className="flex items-center gap-1.5">
+          <input
+            type="number"
+            min="0"
+            max="8"
+            step="1"
+            placeholder="—"
+            value={row.localRoundingDecimals}
+            onChange={(e) => onUpdate({ localRoundingDecimals: e.target.value })}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !hasError) onSave(); }}
+            className="w-12 bg-terminal-surface-2 border border-terminal-border rounded px-2 py-1 text-xs font-mono text-text-primary text-right outline-none focus:border-primary"
+          />
+          {row.localRoundingDecimals !== '' && (
+            <MiniSelect
+              value={row.localRoundingMode}
+              options={[
+                { value: 'FLOOR', label: 'Floor' },
+                { value: 'CEIL', label: 'Ceil' },
+              ]}
+              onChange={(v) => onUpdate({ localRoundingMode: v })}
+            />
+          )}
+        </div>
       </td>
       <td className="px-3 py-3 text-center">
         {row.saved ? (

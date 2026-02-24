@@ -25,6 +25,12 @@ export const TROY_OZ_TO_GRAMS = 31.1034768;
 /** Default base currency */
 export const DEFAULT_BASE = 'USD';
 
+/** Valid base currencies for presentation layer (excludes commodities) */
+export const VALID_BASES: string[] = [
+  'USD',
+  ...SUPPORTED_PAIRS.filter((p) => p.type !== 'commodity').map((p) => p.quote),
+];
+
 /** Refresh interval in milliseconds (configurable via env) */
 export const REFRESH_INTERVAL_MS = parseInt(process.env.RATE_REFRESH_MS ?? '60000', 10);
 

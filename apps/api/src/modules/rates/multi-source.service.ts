@@ -10,7 +10,7 @@ import {
   TROY_OZ_TO_GRAMS,
 } from './rates.constants';
 import type { StoreRateMode } from './rates.constants';
-import { computeBidAsk, spreadConfigFromRow, type SpreadType, type SpreadMode, type FixedUnit, type SpreadConfig, DEFAULT_SPREAD_CONFIG } from './spread.util';
+import { computeBidAsk, spreadConfigFromRow, applyRounding, type SpreadType, type SpreadMode, type FixedUnit, type SpreadConfig, type RoundingConfig, type RoundingMode, DEFAULT_SPREAD_CONFIG } from './spread.util';
 
 // ─── Response DTOs ─────────────────────────────────────────
 
@@ -52,6 +52,9 @@ export interface BoardRow {
     bid: number;
     ask: number;
     spread: number;
+    roundingDecimals: number | null;
+    roundingMode: string | null;
+    updatedAt: string;
   };
   variance: { points: number; direction: 'tight' | 'wide' | 'normal' };
 }
@@ -90,14 +93,17 @@ export class MultiSourceService {
 
   // ─── Main board endpoint ─────────────────────────────────
 
-  async getBoard(): Promise<MultiSourceBoardResponse> {
+  async getBoard(baseCurrency = 'USD'): Promise<MultiSourceBoardResponse> {
+    let board: MultiSourceBoardResponse;
     if (this.cachedBoard && Date.now() - this.lastFetchTime < 5000) {
-      return this.cachedBoard;
+      board = this.cachedBoard;
+    } else {
+      board = await this.refreshBoard();
     }
-    return this.refreshBoard();
+    return baseCurrency === 'USD' ? board : this.convertBoardToBase(board, baseCurrency);
   }
 
-  async refreshBoard(): Promise<MultiSourceBoardResponse> {
+  async refreshBoard(baseCurrency = 'USD'): Promise<MultiSourceBoardResponse> {
     const quotes = MULTI_SOURCE_QUOTES;
     const base = DEFAULT_BASE;
 
@@ -311,7 +317,7 @@ export class MultiSourceService {
 
     this.cachedBoard = board;
     this.lastFetchTime = Date.now();
-    return board;
+    return baseCurrency === 'USD' ? board : this.convertBoardToBase(board, baseCurrency);
   }
 
   // ─── Store rate management ───────────────────────────────
@@ -377,24 +383,65 @@ export class MultiSourceService {
 
   // ─── Spread management ─────────────────────────────────
 
-  async getAllSpreads() {
+  async getAllSpreads(baseCurrency = 'USD') {
     const storeRates = await this.prisma.storeRate.findMany({
       orderBy: { quote: 'asc' },
     });
     const pairMeta = new Map(SUPPORTED_PAIRS.map((p) => [p.quote, p]));
 
+    const usdToBaseMid =
+      baseCurrency === 'USD'
+        ? 1
+        : Number(storeRates.find((sr) => sr.quote === baseCurrency)?.mid ?? 0);
+    const effectiveBase = baseCurrency !== 'USD' && usdToBaseMid === 0 ? 'USD' : baseCurrency;
+    const factor = effectiveBase === 'USD' ? 1 : usdToBaseMid;
+
     return storeRates.map((sr) => {
-      const mid = Number(sr.mid);
+      const usdMid = Number(sr.mid);
       const config = spreadConfigFromRow(sr);
-      const { bid, ask, spread } = computeBidAsk(mid, config, sr.quote);
       const meta = pairMeta.get(sr.quote);
 
+      let convertedMid: number;
+      let pairBase: string;
+      let pairQuote: string;
+      let pairLabel: string;
+      let quoteName: string;
+
+      if (effectiveBase === 'USD') {
+        convertedMid = usdMid;
+        pairBase = 'USD';
+        pairQuote = sr.quote;
+        pairLabel = meta?.label ?? `USD/${sr.quote}`;
+        quoteName = meta?.quoteName ?? sr.quote;
+      } else if (sr.quote === effectiveBase) {
+        convertedMid = usdMid > 0 ? 1 / usdMid : 0;
+        pairBase = effectiveBase;
+        pairQuote = 'USD';
+        pairLabel = `${effectiveBase}/USD`;
+        quoteName = 'US Dollar';
+      } else {
+        convertedMid = factor > 0 ? usdMid / factor : 0;
+        pairBase = effectiveBase;
+        pairQuote = sr.quote;
+        pairLabel =
+          meta?.type === 'commodity'
+            ? `${sr.quote}/${effectiveBase}`
+            : `${effectiveBase}/${sr.quote}`;
+        quoteName = meta?.quoteName ?? sr.quote;
+      }
+
+      const rounding: RoundingConfig = {
+        decimals: sr.roundingDecimals ?? null,
+        mode: (sr.roundingMode as RoundingMode) ?? null,
+      };
+      const { bid, ask, spread } = computeBidAsk(convertedMid, config, pairQuote, rounding);
+
       return {
-        base: sr.base,
-        quote: sr.quote,
-        pair: meta?.label ?? `${sr.base}/${sr.quote}`,
-        quoteName: meta?.quoteName ?? sr.quote,
-        mid,
+        base: pairBase,
+        quote: pairQuote,
+        pair: pairLabel,
+        quoteName,
+        mid: convertedMid,
         mode: sr.mode as string,
         sourceHint: sr.sourceHint,
         spreadType: config.spreadType,
@@ -404,6 +451,8 @@ export class MultiSourceService {
         spreadFixed: config.spreadFixed,
         buyMargin: config.buyMargin,
         sellMargin: config.sellMargin,
+        roundingDecimals: sr.roundingDecimals ?? null,
+        roundingMode: sr.roundingMode ?? null,
         bid,
         ask,
         spread,
@@ -422,6 +471,8 @@ export class MultiSourceService {
     spreadFixed?: number;
     buyMargin?: number;
     sellMargin?: number;
+    roundingDecimals?: number | null;
+    roundingMode?: string | null;
   }) {
     const result = await this.prisma.storeRate.upsert({
       where: { base_quote: { base: dto.base, quote: dto.quote } },
@@ -436,6 +487,8 @@ export class MultiSourceService {
         spreadFixed: dto.spreadFixed ?? 0,
         buyMargin: dto.buyMargin ?? 0,
         sellMargin: dto.sellMargin ?? 0,
+        roundingDecimals: dto.roundingDecimals ?? null,
+        roundingMode: dto.roundingMode ?? null,
       },
       update: {
         spreadType: dto.spreadType,
@@ -445,6 +498,8 @@ export class MultiSourceService {
         spreadFixed: dto.spreadFixed ?? 0,
         buyMargin: dto.buyMargin ?? 0,
         sellMargin: dto.sellMargin ?? 0,
+        roundingDecimals: dto.roundingDecimals ?? null,
+        roundingMode: dto.roundingMode ?? null,
       },
     });
     this.cachedBoard = null;
@@ -457,6 +512,122 @@ export class MultiSourceService {
       where: { base_quote: { base, quote } },
     });
     return sr ? Number(sr.mid) : 0;
+  }
+
+  // ─── Base currency conversion ─────────────────────────────
+
+  private convertBoardToBase(
+    board: MultiSourceBoardResponse,
+    baseCurrency: string,
+  ): MultiSourceBoardResponse {
+    const baseRow = board.rows.find((r) => r.quote === baseCurrency);
+    if (!baseRow || !baseRow.storeRate.mid || baseRow.storeRate.mid === 0) {
+      return board;
+    }
+
+    const usdToBaseMid = baseRow.storeRate.mid;
+    const pairMeta = new Map(SUPPORTED_PAIRS.map((p) => [p.quote, p]));
+
+    const convertedRows: BoardRow[] = [];
+
+    for (const row of board.rows) {
+      const config: SpreadConfig = {
+        spreadType: row.storeRate.spreadType,
+        spreadMode: row.storeRate.spreadMode,
+        fixedUnit: row.storeRate.fixedUnit,
+        spreadPercent: row.storeRate.spreadPercent,
+        spreadFixed: row.storeRate.spreadFixed,
+        buyMargin: row.storeRate.buyMargin,
+        sellMargin: row.storeRate.sellMargin,
+      };
+      const rounding: RoundingConfig = {
+        decimals: row.storeRate.roundingDecimals,
+        mode: (row.storeRate.roundingMode as RoundingMode) ?? null,
+      };
+
+      if (row.quote === baseCurrency) {
+        const newMid = 1 / usdToBaseMid;
+        const { bid, ask, spread } = computeBidAsk(newMid, config, 'USD', rounding);
+
+        const convertedSourceRates: Record<string, SourceRateCell> = {};
+        for (const [key, cell] of Object.entries(row.sourceRates)) {
+          if (cell.status === 'missing' || cell.mid === 0) {
+            convertedSourceRates[key] = { ...cell };
+          } else {
+            convertedSourceRates[key] = {
+              buy: cell.buy != null && cell.buy > 0 ? Number((1 / cell.buy).toPrecision(8)) : null,
+              sell: cell.sell != null && cell.sell > 0 ? Number((1 / cell.sell).toPrecision(8)) : null,
+              mid: Number((1 / cell.mid).toPrecision(8)),
+              latencyMs: cell.latencyMs,
+              status: cell.status,
+            };
+          }
+        }
+
+        convertedRows.push({
+          base: baseCurrency,
+          quote: 'USD',
+          pair: `${baseCurrency}/USD`,
+          quoteName: 'US Dollar',
+          sourceRates: convertedSourceRates,
+          globalAvg: {
+            buy: null,
+            sell: null,
+            mid: row.globalAvg.mid > 0 ? Number((1 / row.globalAvg.mid).toPrecision(8)) : 0,
+          },
+          storeRate: { ...row.storeRate, mid: Number(newMid.toPrecision(8)), bid, ask, spread },
+          variance: row.variance,
+        });
+      } else {
+        const newMid = row.storeRate.mid / usdToBaseMid;
+        const { bid, ask, spread } = computeBidAsk(newMid, config, row.quote, rounding);
+
+        const convertedSourceRates: Record<string, SourceRateCell> = {};
+        for (const [key, cell] of Object.entries(row.sourceRates)) {
+          const baseCell = baseRow.sourceRates[key];
+          const baseMid =
+            baseCell && baseCell.status !== 'missing' && baseCell.mid > 0
+              ? baseCell.mid
+              : usdToBaseMid;
+
+          if (cell.status === 'missing' || cell.mid === 0) {
+            convertedSourceRates[key] = { ...cell };
+          } else {
+            convertedSourceRates[key] = {
+              buy: cell.buy != null ? Number((cell.buy / baseMid).toPrecision(8)) : null,
+              sell: cell.sell != null ? Number((cell.sell / baseMid).toPrecision(8)) : null,
+              mid: Number((cell.mid / baseMid).toPrecision(8)),
+              latencyMs: cell.latencyMs,
+              status: cell.status,
+            };
+          }
+        }
+
+        const globalAvgMid =
+          row.globalAvg.mid > 0 && baseRow.globalAvg.mid > 0
+            ? Number((row.globalAvg.mid / baseRow.globalAvg.mid).toPrecision(8))
+            : 0;
+
+        const meta = pairMeta.get(row.quote);
+        const pairLabel =
+          meta?.type === 'commodity'
+            ? `${row.quote}/${baseCurrency}`
+            : `${baseCurrency}/${row.quote}`;
+
+        convertedRows.push({
+          base: baseCurrency,
+          quote: row.quote,
+          pair: pairLabel,
+          quoteName: row.quoteName,
+          sourceRates: convertedSourceRates,
+          globalAvg: { buy: null, sell: null, mid: globalAvgMid },
+          storeRate: { ...row.storeRate, mid: Number(newMid.toPrecision(8)), bid, ask, spread },
+          variance: row.variance,
+        });
+      }
+    }
+
+    return { ...board, rows: convertedRows };
   }
 
   // ─── Internal helpers ────────────────────────────────────
@@ -478,6 +649,10 @@ export class MultiSourceService {
     _sourceRates: Record<string, SourceRateCell>,
   ): BoardRow['storeRate'] {
     const config = existing ? spreadConfigFromRow(existing) : DEFAULT_SPREAD_CONFIG;
+    const rounding: RoundingConfig = {
+      decimals: existing ? (existing.roundingDecimals as number | null) ?? null : null,
+      mode: existing ? (existing.roundingMode as RoundingMode | null) ?? null : null,
+    };
 
     if (!existing) {
       const { bid, ask, spread } = computeBidAsk(avgMid || 0, config, quote);
@@ -490,6 +665,9 @@ export class MultiSourceService {
         bid,
         ask,
         spread,
+        roundingDecimals: null,
+        roundingMode: null,
+        updatedAt: new Date().toISOString(),
       };
     }
 
@@ -502,7 +680,7 @@ export class MultiSourceService {
     };
 
     const mid = mode === 'AUTO_AVG' ? (avgMid || 0) : Number(existing.mid);
-    const { bid, ask, spread } = computeBidAsk(mid, config, quote);
+    const { bid, ask, spread } = computeBidAsk(mid, config, quote, rounding);
 
     return {
       mid: Number(mid.toPrecision(8)),
@@ -513,6 +691,11 @@ export class MultiSourceService {
       bid,
       ask,
       spread,
+      roundingDecimals: rounding.decimals,
+      roundingMode: rounding.mode,
+      updatedAt: existing.updatedAt instanceof Date
+        ? (existing.updatedAt as Date).toISOString()
+        : (existing.updatedAt as string) ?? new Date().toISOString(),
     };
   }
 

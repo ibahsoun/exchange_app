@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, memo } from 'react';
+import { useState, useCallback, useEffect, memo, useRef } from 'react';
 import {
   Search,
   Download,
@@ -9,6 +9,9 @@ import {
   Phone,
   Mail,
   AlertCircle,
+  Pencil,
+  Trash2,
+  Upload,
 } from 'lucide-react';
 import { cn, getInitials } from '@/lib/utils';
 import { TableRowSkeleton } from '@/components/Skeleton';
@@ -69,6 +72,20 @@ export function CustomersPage() {
   const [addErrors, setAddErrors] = useState<Record<string, string>>({});
   const [addSubmitting, setAddSubmitting] = useState(false);
 
+  // ─── Edit Customer modal state ───────────────────────
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editForm, setEditForm] = useState({ name: '', phone: '', email: '', level: 3 });
+  const [editErrors, setEditErrors] = useState<Record<string, string>>({});
+  const [editSubmitting, setEditSubmitting] = useState(false);
+
+  // ─── Delete confirm state ───────────────────────────
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+
+  // ─── Upload Excel state ─────────────────────────────
+  const [uploadSubmitting, setUploadSubmitting] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
+
   // ─── Fetch customers ─────────────────────────────────
   const fetchCustomers = useCallback(async () => {
     setLoading(true);
@@ -128,6 +145,92 @@ export function CustomersPage() {
     }
   }, [addForm, toast, fetchCustomers, refreshStats]);
 
+  // ─── Edit customer ────────────────────────────────────
+  const openEditModal = useCallback((customer: Customer) => {
+    setEditForm({
+      name: customer.name,
+      phone: customer.phone ?? '',
+      email: customer.email ?? '',
+      level: customer.level,
+    });
+    setEditErrors({});
+    setShowEditModal(true);
+  }, []);
+
+  const handleSaveEdit = useCallback(async () => {
+    if (!selectedId) return;
+    const errs: Record<string, string> = {};
+    if (!editForm.name.trim()) errs.name = 'Name is required';
+    if (editForm.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(editForm.email)) errs.email = 'Invalid email';
+    setEditErrors(errs);
+    if (Object.keys(errs).length > 0) return;
+
+    setEditSubmitting(true);
+    try {
+      await customersApi.update(selectedId, {
+        name: editForm.name.trim(),
+        phone: editForm.phone.trim() || undefined,
+        email: editForm.email.trim() || undefined,
+        level: editForm.level,
+      });
+      toast('success', `Customer "${editForm.name.trim()}" updated`);
+      setShowEditModal(false);
+      fetchCustomers();
+      refreshStats();
+    } catch (err) {
+      console.error('Failed to update customer:', err);
+      toast('error', 'Failed to update customer');
+    } finally {
+      setEditSubmitting(false);
+    }
+  }, [selectedId, editForm, toast, fetchCustomers, refreshStats]);
+
+  // ─── Delete customer ──────────────────────────────────
+  const handleDeleteCustomer = useCallback(async (id: string) => {
+    setDeleteSubmitting(true);
+    try {
+      await customersApi.delete(id);
+      toast('success', 'Customer deleted');
+      setDeleteConfirmId(null);
+      if (selectedId === id) setSelectedId(null);
+      fetchCustomers();
+      refreshStats();
+    } catch (err) {
+      console.error('Failed to delete customer:', err);
+      toast('error', 'Failed to delete customer');
+    } finally {
+      setDeleteSubmitting(false);
+    }
+  }, [selectedId, toast, fetchCustomers, refreshStats]);
+
+  // ─── Upload Excel ─────────────────────────────────────
+  const handleUploadExcel = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const valid = /\.(xlsx|xls)$/i.test(file.name);
+    if (!valid) {
+      toast('error', 'Please select an Excel file (.xlsx or .xls)');
+      return;
+    }
+    setUploadSubmitting(true);
+    try {
+      const result = await customersApi.uploadExcel(file);
+      const msg = result.errors?.length
+        ? `Uploaded ${result.created} customer(s). ${result.errors.length} row(s) had errors.`
+        : `${result.created} customer(s) uploaded successfully.`;
+      toast(result.created > 0 ? 'success' : 'error', msg);
+      if (result.created > 0) {
+        fetchCustomers();
+        refreshStats();
+      }
+    } catch (err) {
+      toast('error', err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      setUploadSubmitting(false);
+    }
+  }, [toast, fetchCustomers, refreshStats]);
+
   // ─── Derived data ──────────────────────────────────────
   const selected = customers.find((c) => c.id === selectedId) ?? null;
 
@@ -184,7 +287,32 @@ export function CustomersPage() {
             />
           </div>
 
-          <button className="btn-outline text-xs py-2 px-3 flex items-center gap-1.5 ml-auto">
+          <input
+            ref={uploadInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            className="hidden"
+            onChange={handleUploadExcel}
+            aria-label="Upload Excel file"
+          />
+          <button
+            type="button"
+            onClick={() => uploadInputRef.current?.click()}
+            disabled={uploadSubmitting}
+            className="btn-outline text-xs py-2 px-3 flex items-center gap-1.5"
+          >
+            <Upload className="w-3.5 h-3.5" />
+            {uploadSubmitting ? 'Uploading...' : 'Upload by Excel'}
+          </button>
+          <button
+            type="button"
+            onClick={() => customersApi.downloadTemplate().catch((err) => toast('error', err instanceof Error ? err.message : 'Download failed'))}
+            className="btn-outline text-xs py-2 px-3 flex items-center gap-1.5"
+            title="Download Excel template with required columns"
+          >
+            <Download className="w-3.5 h-3.5" /> Download template
+          </button>
+          <button className="btn-outline text-xs py-2 px-3 flex items-center gap-1.5">
             <Download className="w-3.5 h-3.5" /> Export
           </button>
         </div>
@@ -380,6 +508,98 @@ export function CustomersPage() {
         </>
       )}
 
+      {/* ═══ Edit Customer Modal ═══════════════════════════ */}
+      {showEditModal && selected && (
+        <>
+          <div className="fixed inset-0 z-50 bg-black/50" onClick={() => setShowEditModal(false)} />
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
+            <div className="bg-terminal-card border border-terminal-border rounded-xl shadow-terminal-lg w-full max-w-md pointer-events-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between p-5 border-b border-terminal-border">
+                <h2 className="font-semibold text-[15px]">Edit Customer</h2>
+                <button onClick={() => setShowEditModal(false)} className="text-text-muted hover:text-text-primary transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-5 space-y-4">
+                <div>
+                  <label className="table-header block mb-1.5">Full Name *</label>
+                  <input
+                    type="text"
+                    value={editForm.name}
+                    onChange={(e) => { setEditForm((f) => ({ ...f, name: e.target.value })); setEditErrors((er) => ({ ...er, name: '' })); }}
+                    placeholder="e.g. John Doe"
+                    className={cn(
+                      'w-full bg-terminal-bg border rounded-lg px-3 py-2.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted',
+                      editErrors.name ? 'border-status-red' : 'border-terminal-border focus:border-primary',
+                    )}
+                  />
+                  {editErrors.name && (
+                    <p className="text-status-red text-xs mt-1 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" /> {editErrors.name}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="table-header block mb-1.5">Phone</label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                    <input
+                      type="tel"
+                      value={editForm.phone}
+                      onChange={(e) => setEditForm((f) => ({ ...f, phone: e.target.value }))}
+                      placeholder="+1 555 123 4567"
+                      className="w-full bg-terminal-bg border border-terminal-border rounded-lg pl-9 pr-3 py-2.5 text-sm text-text-primary outline-none focus:border-primary transition-colors placeholder:text-text-muted"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="table-header block mb-1.5">Email</label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" />
+                    <input
+                      type="email"
+                      value={editForm.email}
+                      onChange={(e) => { setEditForm((f) => ({ ...f, email: e.target.value })); setEditErrors((er) => ({ ...er, email: '' })); }}
+                      placeholder="john@example.com"
+                      className={cn(
+                        'w-full bg-terminal-bg border rounded-lg pl-9 pr-3 py-2.5 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted',
+                        editErrors.email ? 'border-status-red' : 'border-terminal-border focus:border-primary',
+                      )}
+                    />
+                  </div>
+                  {editErrors.email && (
+                    <p className="text-status-red text-xs mt-1 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" /> {editErrors.email}
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="table-header block mb-1.5">Level</label>
+                  <div className="flex items-center gap-1">
+                    {[1, 2, 3, 4, 5].map((i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setEditForm((f) => ({ ...f, level: i }))}
+                        className="p-0.5 transition-transform hover:scale-110"
+                      >
+                        <Star className={cn('w-6 h-6', i <= editForm.level ? 'text-amber-400 fill-amber-400' : 'text-terminal-border')} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center justify-end gap-3 p-5 border-t border-terminal-border">
+                <button onClick={() => setShowEditModal(false)} className="btn-outline text-xs py-2 px-4">Cancel</button>
+                <button onClick={handleSaveEdit} disabled={editSubmitting} className="btn-primary text-xs py-2 px-4 flex items-center gap-1.5">
+                  <Pencil className="w-3.5 h-3.5" /> {editSubmitting ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
       {/* ═══ Detail drawer ═══════════════════════════════ */}
       {selected && (
         <div className="w-[380px] min-w-[380px] bg-terminal-card border-l border-terminal-border h-full overflow-y-auto animate-slide-in-right" role="complementary" aria-label="Customer details">
@@ -444,6 +664,45 @@ export function CustomersPage() {
               <div className="text-sm text-text-primary">
                 {new Date(selected.createdAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
               </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex flex-col gap-2 pt-2">
+              {deleteConfirmId === selected.id ? (
+                <div className="flex items-center justify-between gap-3 p-3 bg-terminal-surface rounded-lg border border-terminal-border">
+                  <span className="text-sm text-text-secondary">Delete this customer?</span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setDeleteConfirmId(null)}
+                      className="btn-outline text-xs py-1.5 px-3"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => handleDeleteCustomer(selected.id)}
+                      disabled={deleteSubmitting}
+                      className="text-xs py-1.5 px-3 rounded bg-status-red/20 text-status-red hover:bg-status-red/30 border border-status-red/50"
+                    >
+                      {deleteSubmitting ? 'Deleting...' : 'Delete'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <button
+                    onClick={() => openEditModal(selected)}
+                    className="btn-outline w-full text-xs py-2 px-4 flex items-center justify-center gap-1.5"
+                  >
+                    <Pencil className="w-3.5 h-3.5" /> Edit Customer
+                  </button>
+                  <button
+                    onClick={() => setDeleteConfirmId(selected.id)}
+                    className="w-full text-xs py-2 px-4 flex items-center justify-center gap-1.5 rounded-lg border border-terminal-border bg-transparent text-status-red hover:bg-status-red/10 transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Delete Customer
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

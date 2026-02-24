@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
-import { Moon, Sun } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { Moon, Sun, RefreshCw } from 'lucide-react';
 import { useRatesConnected } from '@/hooks/useRates';
 import { useTheme } from '@/contexts/ThemeContext';
+import { schedulerApi } from '@/lib/api';
+import { cn } from '@/lib/utils';
 
 function useClock() {
   const [now, setNow] = useState(new Date());
@@ -16,6 +18,18 @@ export function Header() {
   const now = useClock();
   const wsConnected = useRatesConnected();
   const { theme, toggleTheme } = useTheme();
+  const [fetching, setFetching] = useState(false);
+
+  const handleFetchRates = useCallback(async () => {
+    setFetching(true);
+    try {
+      await schedulerApi.fetchOnce();
+    } catch {
+      // ignore
+    } finally {
+      setFetching(false);
+    }
+  }, []);
 
   const time = now.toLocaleTimeString('en-US', {
     hour12: false,
@@ -60,6 +74,19 @@ export function Header() {
           </div>
           <div className="text-xxs text-text-muted tracking-wider">{date}</div>
         </div>
+
+        {/* Fetch rates */}
+        <button
+          onClick={handleFetchRates}
+          disabled={fetching}
+          className={cn(
+            'p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-terminal-surface transition-colors mr-1',
+            fetching && 'opacity-60 cursor-not-allowed',
+          )}
+          title="Refresh live rates"
+        >
+          <RefreshCw className={cn('w-[18px] h-[18px]', fetching && 'animate-spin')} />
+        </button>
 
         {/* Theme toggle */}
         <button

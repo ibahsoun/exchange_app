@@ -11,7 +11,7 @@ datasource db {
 
 model RateSource {
   id        String   @id @default(cuid())
-  name      String   @unique          // "mock", "currencyfreaks", "twelvedata", "oanda"
+  name      String   @unique          // "mock", "currencyfreaks"
   status    String   @default("active") // active, disabled, error
   priority  Int      @default(0)
   config    Json?                      // provider-specific config (API keys etc)
@@ -71,7 +71,7 @@ model RateTick {
   id        String   @id @default(cuid())
   base      String                        // "USD"
   quote     String                        // "EUR"
-  source    String                        // "currencyfreaks", "twelvedata", "oanda"
+  source    String                        // "currencyfreaks"
   bid       Decimal? @db.Decimal(18, 8)   // nullable — some sources only provide mid
   ask       Decimal? @db.Decimal(18, 8)
   mid       Decimal  @db.Decimal(18, 8)
@@ -98,10 +98,25 @@ model StoreRate {
   spreadFixed   Decimal  @db.Decimal(18, 8) @default(0)
   buyMargin     Decimal  @db.Decimal(18, 8) @default(0)
   sellMargin    Decimal  @db.Decimal(18, 8) @default(0)
+  roundingDecimals Int?                       // null = no rounding
+  roundingMode     String?                    // "FLOOR" | "CEIL"
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   @@unique([base, quote])
+}
+
+// ─── Currency configuration ─────────────────────────────────────
+
+model Currency {
+  id        String   @id @default(cuid())
+  code      String   @unique          // "USD", "BRL"
+  name      String                    // "US Dollar"
+  symbol    String                    // "$", "R$"
+  color     String   @default("bg-gray-600") // Tailwind bg class for UI
+  sortIndex Int      @default(0)      // display order in dropdowns
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // ─── Existing models ─────────────────────────────────────────

@@ -5,12 +5,7 @@ import { RatesGateway } from './rates.gateway';
 import { RatesScheduler } from './rates.scheduler';
 import { MultiSourceController } from './multi-source.controller';
 import { MultiSourceService } from './multi-source.service';
-import {
-  MockRateProvider,
-  CurrencyFreaksProvider,
-  TwelveDataProvider,
-  OandaProvider,
-} from './providers';
+import { MockRateProvider, CurrencyFreaksProvider } from './providers';
 import { RATE_PROVIDER, MULTI_SOURCE_PROVIDERS } from './rates.constants';
 
 @Module({
@@ -29,11 +24,7 @@ import { RATE_PROVIDER, MULTI_SOURCE_PROVIDERS } from './rates.constants';
     },
     {
       provide: MULTI_SOURCE_PROVIDERS,
-      useFactory: () => [
-        new CurrencyFreaksProvider(),
-        new TwelveDataProvider(),
-        new OandaProvider(),
-      ],
+      useFactory: () => [new CurrencyFreaksProvider()],
     },
   ],
   exports: [RatesService, MultiSourceService],

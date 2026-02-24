@@ -30,11 +30,14 @@ interface RatesState {
   connected: boolean;
   /** Last update timestamp */
   lastUpdated: string | null;
+  /** Last sync timestamp from multi-source board (global) */
+  lastSyncAt: string | null;
 
   // Actions
   setRates: (rates: LiveRate[]) => void;
   setSummary: (summary: MarketSummary) => void;
   setConnected: (connected: boolean) => void;
+  setLastSyncAt: (ts: string) => void;
 
   // Selectors (convenience)
   getRate: (base: string, quote: string) => LiveRate | undefined;
