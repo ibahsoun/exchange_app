@@ -687,9 +687,10 @@ export class MultiSourceService {
           if (cell.status === 'missing' || cell.mid === 0) {
             convertedSourceRates[key] = { ...cell };
           } else {
+            // Flipping the pair swaps the sides: 1/sell is the cheaper one.
             convertedSourceRates[key] = {
-              buy: cell.buy != null && cell.buy > 0 ? Number((1 / cell.buy).toPrecision(8)) : null,
-              sell: cell.sell != null && cell.sell > 0 ? Number((1 / cell.sell).toPrecision(8)) : null,
+              buy: cell.sell != null && cell.sell > 0 ? Number((1 / cell.sell).toPrecision(8)) : null,
+              sell: cell.buy != null && cell.buy > 0 ? Number((1 / cell.buy).toPrecision(8)) : null,
               mid: Number((1 / cell.mid).toPrecision(8)),
               latencyMs: cell.latencyMs,
               status: cell.status,

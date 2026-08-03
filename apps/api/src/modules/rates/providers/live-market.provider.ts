@@ -414,15 +414,18 @@ export class LiveMarketClient {
     const sides = sidesOf(row);
     if (!sides) return null;
 
-    const { bid, ask, mid } = spec.invert ? invertSides(sides) : sides;
-    if (!Number.isFinite(mid) || mid <= 0) return null;
+    const { bid, ask } = spec.invert ? invertSides(sides) : sides;
+    // Anchor on the BID of our orientation, not the vendor mid: the store rate
+    // and all pricing follow the conservative side of the market. (Inversion
+    // has already swapped the sides, so this is the bid of the flipped pair.)
+    if (!Number.isFinite(bid) || bid <= 0) return null;
 
     return {
       base: 'USD',
       quote,
       bid: round(bid),
       ask: round(ask),
-      mid: round(mid),
+      mid: round(bid),
       timestamp: row.timestamp,
       receivedAt: row.receivedAt,
       derived: false,
@@ -457,7 +460,8 @@ export class LiveMarketClient {
     };
     if (spec.invert) sides = invertSides(sides);
 
-    if (!Number.isFinite(sides.mid) || sides.mid <= 0) return null;
+    // Same anchoring rule as direct pairs: the cross's own bid, post-inversion.
+    if (!Number.isFinite(sides.bid) || sides.bid <= 0) return null;
 
     // The cross is only as fresh as its stalest leg.
     const rows = [...numRows, ...denRows];
@@ -469,7 +473,7 @@ export class LiveMarketClient {
       quote,
       bid: round(sides.bid),
       ask: round(sides.ask),
-      mid: round(sides.mid),
+      mid: round(sides.bid),
       timestamp: oldest('timestamp'),
       receivedAt: oldest('receivedAt'),
       derived: true,

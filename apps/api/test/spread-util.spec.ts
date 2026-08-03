@@ -209,6 +209,23 @@ describe('applyRounding', () => {
     // config mode null, override CEIL: ceil(1.234 * 100)/100 = 1.24
     expect(applyRounding(1.234, { decimals: 2, mode: null }, 'CEIL')).toBeCloseTo(1.24, 10);
   });
+
+  it('values already on the rounding grid stay put despite float noise (snapToStep)', () => {
+    // 5.02 * 100 floats to 501.99999999999994; the true product is exactly 502,
+    // so FLOOR must return 5.02 unchanged (and CEIL likewise).
+    expect(applyRounding(5.02, { decimals: 2, mode: 'FLOOR' })).toBe(5.02);
+    // 4.98 * 100 floats to 498.00000000000006; CEIL must not step up to 4.99.
+    expect(applyRounding(4.98, { decimals: 2, mode: 'CEIL' })).toBe(4.98);
+    // Whole-unit grid: 1397 at 0 decimals is on-grid both ways.
+    expect(applyRounding(1397, { decimals: 0, mode: 'FLOOR' })).toBe(1397);
+    expect(applyRounding(1397, { decimals: 0, mode: 'CEIL' })).toBe(1397);
+  });
+
+  it('genuinely off-grid values still step in the configured direction', () => {
+    // 5.021 is 1/10 of a step above the 2dp grid — floor 5.02, ceil 5.03.
+    expect(applyRounding(5.021, { decimals: 2, mode: 'FLOOR' })).toBeCloseTo(5.02, 10);
+    expect(applyRounding(5.021, { decimals: 2, mode: 'CEIL' })).toBeCloseTo(5.03, 10);
+  });
 });
 
 describe('effectiveDecimals', () => {

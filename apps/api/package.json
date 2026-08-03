@@ -12,6 +12,7 @@
     "prisma:seed": "tsx prisma/seed.ts",
     "prisma:generate": "prisma generate",
     "prisma:studio": "prisma studio",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

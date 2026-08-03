@@ -45,8 +45,11 @@ export function useRatesConnection() {
     fetchInitial();
 
     // 2. WebSocket connection
+    // Try websocket first but fall back to HTTP long-polling: some
+    // proxies/extensions block websocket upgrades while plain HTTP works,
+    // which used to strand the client on a permanent "disconnected" banner.
     const socket = io(`${WS_URL}/ws/rates`, {
-      transports: ['websocket'],
+      transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionDelay: 2000,
       reconnectionAttempts: Infinity,

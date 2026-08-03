@@ -64,6 +64,8 @@ interface MakeOpts {
   rates?: ReturnType<typeof rateRow>[];
   fee?: Fee | null;
   destination?: { id: string; commission: number; commissionType: string } | null;
+  /** Per-pair rounding decimals on the USD/<quote> store rate (null = none configured). */
+  roundingDecimals?: number | null;
 }
 
 function makeService(opts: MakeOpts = {}) {
@@ -91,6 +93,10 @@ function makeService(opts: MakeOpts = {}) {
         return { ...args.data, id: 'tx1', customer: { name: CUSTOMER.name, customerId: CUSTOMER.customerId } };
       },
       findFirst: async () => null,
+    },
+    storeRate: {
+      findUnique: async (_args: any) =>
+        opts.roundingDecimals == null ? null : { roundingDecimals: opts.roundingDecimals },
     },
   };
   const ratesService = {
@@ -414,11 +420,57 @@ describe('persisted transaction record', () => {
     expect(data.rateApplied).toBeCloseTo(5.518666725, 7);
     expect(Math.abs(data.rateApplied - data.amountOut / 100)).toBeGreaterThan(1e-6);
   });
+
+  it('amountOut is FLOORed at the pair rounding decimals when one is configured', async () => {
+    // Same conversion as above: unrounded out = 551.8666725...
+    // With USD/BRL roundingDecimals = 2 the teller screen shows floor -> 551.86
+    // (not the 551.87 that 2dp-nearest gives), and the ledger must match it.
+    const { svc, persisted } = makeService({
+      fee: { base: 'BRL', quote: 'USD', percent: 1, points: 2 },
+      roundingDecimals: 2,
+    });
+    await svc.create(dto('USD', 'BRL', 100));
+    expect(persisted().amountOut).toBe(551.86);
+  });
+
+  it('amountOut is FLOORed at 0 decimals when the pair rounds to whole units', async () => {
+    // no fee: out = 100 * 5.02 = 502 exactly. Floats compute the product as
+    // 501.99999999999994, but snapToStep restores the on-grid value before
+    // flooring, so the ledger records the mathematically correct 502.
+    const whole = makeService({ roundingDecimals: 0 });
+    await whole.svc.create(dto('USD', 'BRL', 100));
+    expect(whole.persisted().amountOut).toBe(502);
+
+    // fee 1% no points: out = 100 * (5.02 - 0.05) = 497.00000000000006 (float)
+    // floor at 0 dp -> 497
+    const fee = makeService({
+      fee: { base: 'USD', quote: 'BRL', percent: 1, points: 0 },
+      roundingDecimals: 0,
+    });
+    await fee.svc.create(dto('USD', 'BRL', 100));
+    expect(fee.persisted().amountOut).toBe(497);
+  });
+
+  it('foreign -> USD ignores pair rounding config (no USD store rate) and keeps 2dp', async () => {
+    // out = 100 / 4.98 = 20.0803212... -> 20.08 at 2dp nearest
+    const { svc, persisted } = makeService({ roundingDecimals: 0 });
+    await svc.create(dto('BRL', 'USD', 100));
+    expect(persisted().amountOut).toBe(20.08);
+  });
 });
 
 // ─── Error paths ───────────────────────────────────────────
 
 describe('error paths', () => {
+  it('amountIn of 0, negative, or NaN -> BadRequestException (nothing persisted)', async () => {
+    const { svc, createCalls } = makeService();
+    for (const bad of [0, -100, NaN, Infinity]) {
+      await expect(svc.create(dto('USD', 'BRL', bad))).rejects.toBeInstanceOf(BadRequestException);
+      await expect(svc.create(dto('USD', 'BRL', bad))).rejects.toThrow('Amount must be greater than 0');
+    }
+    expect(createCalls).toHaveLength(0);
+  });
+
   it('unknown customer -> BadRequestException', async () => {
     const { svc } = makeService({ customer: null });
     await expect(svc.create(dto('USD', 'BRL', 100))).rejects.toBeInstanceOf(BadRequestException);

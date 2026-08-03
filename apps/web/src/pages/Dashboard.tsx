@@ -218,9 +218,13 @@ export function DashboardPage() {
 
   // ─── Pricing from backend (single source of truth) ─
   const [pricing, setPricing] = useState<SpreadRow[]>([]);
+  // USD-based rows for the conversion math — the backend always prices from
+  // USD/<quote> rows, so the preview must too (display base is display-only).
+  const [usdPricing, setUsdPricing] = useState<SpreadRow[]>([]);
 
   const fetchPricing = useCallback(() => {
     spreadApi.getAll(baseCurrency).then(setPricing).catch(console.error);
+    spreadApi.getAll('USD').then(setUsdPricing).catch(console.error);
   }, [baseCurrency]);
 
   useEffect(() => { fetchPricing(); }, [fetchPricing]);
@@ -234,20 +238,28 @@ export function DashboardPage() {
 
   // ─── The selected customer's fee for the selected pair ─
   const [pairFee, setPairFee] = useState<CustomerPairFee | null>(null);
+  // The backend charges the fee regardless — never preview a fee-less rate
+  // just because the lookup failed.
+  const [feeUnavailable, setFeeUnavailable] = useState(false);
 
   useEffect(() => {
     if (!selectedCustomerId || payCurrency === receiveCurrency) {
       setPairFee(null);
+      setFeeUnavailable(false);
       return;
     }
     let cancelled = false;
     customerFeesApi
       .getForCustomer(selectedCustomerId, payCurrency, receiveCurrency)
       .then((fee) => {
-        if (!cancelled) setPairFee(fee.points > 0 || fee.percent > 0 ? fee : null);
+        if (cancelled) return;
+        setPairFee(fee.points > 0 || fee.percent > 0 ? fee : null);
+        setFeeUnavailable(false);
       })
       .catch(() => {
-        if (!cancelled) setPairFee(null);
+        if (cancelled) return;
+        setPairFee(null);
+        setFeeUnavailable(true);
       });
     return () => {
       cancelled = true;
@@ -257,9 +269,9 @@ export function DashboardPage() {
   // Lookup returns backend-computed bid/ask/mid — no frontend spread math
   const pricingMap = useMemo(() => {
     const m = new Map<string, SpreadRow>();
-    for (const row of pricing) m.set(row.quote, row);
+    for (const row of usdPricing) m.set(row.quote, row);
     return m;
-  }, [pricing]);
+  }, [usdPricing]);
 
   // Rounding helper: apply per-pair rounding to a value
   // Rounding helper: FLOOR for amounts the customer receives (house-favourable)
@@ -267,7 +279,14 @@ export function DashboardPage() {
     const cfg = pricingMap.get(currency);
     if (!cfg || cfg.roundingDecimals == null) return value;
     const factor = Math.pow(10, cfg.roundingDecimals);
-    return Math.floor(value * factor) / factor;
+    // Snap float noise (5.02 * 100 = 501.99999999999994) back onto the grid
+    // before flooring — must stay identical to the backend's snapToStep.
+    let scaled = value * factor;
+    const nearest = Math.round(scaled);
+    if (nearest !== scaled && Math.abs(scaled - nearest) <= Math.abs(scaled) * 1e-12) {
+      scaled = nearest;
+    }
+    return Math.floor(scaled) / factor;
   }, [pricingMap]);
 
   // Format rate respecting per-pair rounding decimals
@@ -300,8 +319,8 @@ export function DashboardPage() {
     // All rates are BASE/QUOTE (how many QUOTE per 1 BASE).
     // Single-rate model: each pair has one rate (the mid) from the backend.
     const BASE_UNIT: Pick<SpreadRow, 'mid' | 'spreadFixed'> = { mid: 1, spreadFixed: 0 };
-    const payPricing = payCurrency === baseCurrency ? BASE_UNIT : pricingMap.get(payCurrency);
-    const recvPricing = receiveCurrency === baseCurrency ? BASE_UNIT : pricingMap.get(receiveCurrency);
+    const payPricing = payCurrency === 'USD' ? BASE_UNIT : pricingMap.get(payCurrency);
+    const recvPricing = receiveCurrency === 'USD' ? BASE_UNIT : pricingMap.get(receiveCurrency);
     if (!payPricing || !recvPricing) return null;
 
     // The pair's rate in pay → receive orientation. Each leg's spread is a
@@ -315,39 +334,39 @@ export function DashboardPage() {
     // discount — in the orientation the fee was stored (mirrors the backend)
     const feeOffset = (mid: number) =>
       pairFee ? (mid * pairFee.percent) / 100 - pairFee.points * FEE_POINT_VALUE : 0;
+    // The charged rate mirrors the backend exactly: the fee is linear in the
+    // orientation it was STORED, so the math branches on that orientation.
     let feeRate: number;
-    // TEMP: equation breakdown shown on the dashboard — remove when done debugging
-    // `perPay` = the rate is quoted as receive-per-pay, so amount out = pay × rate
-    let equation: { unit: string; perPay: boolean; terms: { label: string; value: number }[]; result: number };
     if (pairFee && pairFee.base === receiveCurrency) {
       feeRate = 1 / (1 / crossAdj + feeOffset(1 / crossMid));
-      // Fee stored on the flipped pair — the linear equation lives in that orientation
-      const invMid = 1 / crossMid;
-      equation = {
-        unit: `${payCurrency} per ${receiveCurrency}`,
-        perPay: false,
-        terms: [
-          { label: 'market rate', value: invMid },
-          { label: 'pair spread', value: 1 / crossAdj - invMid },
-          { label: `fee ${pairFee.percent}%`, value: (invMid * pairFee.percent) / 100 },
-          { label: `customer spread (${pairFee.points}pt)`, value: -pairFee.points * FEE_POINT_VALUE },
-        ],
-        result: 1 / feeRate,
-      };
     } else {
       feeRate = crossAdj - feeOffset(crossMid);
-      equation = {
-        unit: `${receiveCurrency} per ${payCurrency}`,
-        perPay: true,
-        terms: [
-          { label: 'market rate', value: crossMid },
-          { label: 'pair spread', value: crossAdj - crossMid },
-          { label: `fee ${pairFee?.percent ?? 0}%`, value: -(crossMid * (pairFee?.percent ?? 0)) / 100 },
-          { label: `customer spread (${pairFee?.points ?? 0}pt)`, value: (pairFee?.points ?? 0) * FEE_POINT_VALUE },
-        ],
-        result: feeRate,
-      };
     }
+
+    // TEMP: equation breakdown shown on the dashboard — remove when done debugging
+    // Displayed in a FIXED orientation regardless of direction: receive per pay
+    // (the same orientation as the customer-rate line), with fixed signs
+    // market + pair spread − fee + customer spread = customer rate.
+    // Each term is the effective contribution in receive-per-pay units — the
+    // rate after that step minus the rate before it — so the sum telescopes to
+    // the charged rate exactly, even when the fee was stored on the flipped
+    // pair and its raw formula is linear in the other orientation.
+    const afterFee = pairFee
+      ? pairFee.base === receiveCurrency
+        ? 1 / (1 / crossAdj + ((1 / crossMid) * pairFee.percent) / 100)
+        : crossAdj - (crossMid * pairFee.percent) / 100
+      : crossAdj;
+    const equation = {
+      unit: `${receiveCurrency} per ${payCurrency}`,
+      perPay: true,
+      terms: [
+        { label: 'market rate', value: crossMid },
+        { label: 'pair spread', value: crossAdj - crossMid },
+        { label: `fee ${pairFee?.percent ?? 0}%`, value: afterFee - crossAdj },
+        { label: `customer spread (${pairFee?.points ?? 0}pt)`, value: feeRate - afterFee },
+      ],
+      result: feeRate,
+    };
 
     // Destination commission (4th layer) — flat fee on final amount, not a rate modifier
     const dest = destinations.find((d) => d.id === selectedDestinationId);
@@ -374,15 +393,18 @@ export function DashboardPage() {
       computedReceive = applyRounding(computedReceive, receiveCurrency);
       computedPay = amount;
     } else {
-      computedPay = amount / feeRate;
-      // Apply destination commission as flat fee or percentage on the converted amount
+      // Invert the backend's forward order (gross = pay × feeRate, then
+      // commission off the gross): undo the commission first — it is charged
+      // in the receive currency — then divide by the rate.
+      let gross = amount;
       if (dest) {
         if (destPercentage > 0) {
-          computedPay = computedPay * (1 + destPercentage / 100);
+          gross = amount / (1 - destPercentage / 100);
         } else {
-          computedPay = computedPay + destFlatFee(dest.commission, dest.commissionType);
+          gross = amount + destFlatFee(dest.commission, dest.commissionType);
         }
       }
+      computedPay = gross / feeRate;
       computedPay = applyRounding(computedPay, payCurrency);
       computedReceive = amount;
     }
@@ -401,21 +423,32 @@ export function DashboardPage() {
       computedPay,
       computedReceive,
     };
-  }, [payAmount, receiveAmount, editDirection, payCurrency, receiveCurrency, baseCurrency, pricingMap, applyRounding, pairFee, destinations, selectedDestinationId]);
+  }, [payAmount, receiveAmount, editDirection, payCurrency, receiveCurrency, pricingMap, applyRounding, pairFee, destinations, selectedDestinationId]);
 
   // ─── Swap currencies ──────────────────────────────────
   const handleSwap = useCallback(() => {
+    // Swap the DISPLAYED amounts, not the raw state: the non-edited side's
+    // state can be stale (its input shows the computed value instead).
+    const shownPay =
+      editDirection === 'pay'
+        ? payAmount
+        : conversionResult
+          ? fmtAmount(conversionResult.computedPay, payCurrency)
+          : payAmount;
+    const shownReceive =
+      editDirection === 'receive'
+        ? receiveAmount
+        : conversionResult
+          ? fmtAmount(conversionResult.computedReceive, receiveCurrency)
+          : receiveAmount;
     setPayCurrency(receiveCurrency);
     setReceiveCurrency(payCurrency);
-    // Swap the amounts and flip direction
-    setPayAmount(
-      receiveAmount || (conversionResult ? fmtAmount(conversionResult.computedReceive, receiveCurrency) : ''),
-    );
-    setReceiveAmount(
-      payAmount || (conversionResult ? fmtAmount(conversionResult.computedPay, payCurrency) : ''),
-    );
+    setPayAmount(shownReceive);
+    setReceiveAmount(shownPay);
+    // The typed (anchor) amount keeps its currency, so it changes sides too.
+    setEditDirection(editDirection === 'pay' ? 'receive' : 'pay');
     setErrors((e) => ({ ...e, currencies: undefined }));
-  }, [payCurrency, receiveCurrency, payAmount, receiveAmount, conversionResult, fmtAmount]);
+  }, [payCurrency, receiveCurrency, payAmount, receiveAmount, editDirection, conversionResult, fmtAmount]);
 
   // ─── Validate ─────────────────────────────────────────
   const validate = useCallback((): boolean => {
@@ -820,7 +853,7 @@ export function DashboardPage() {
           <div className="quote-panel">
             <div className="px-4 py-3">
               <div className="flex items-start justify-between gap-3">
-                <span className="table-header">Market rate (mid)</span>
+                <span className="table-header">Market rate</span>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   {conversionResult && (conversionResult.feePoints > 0 || conversionResult.feePercent > 0) && (
                     <span className="chip chip-amber">
@@ -892,6 +925,12 @@ export function DashboardPage() {
 
         {/* ─── Actions ────────────────────────────────── */}
         <div className="card-footer">
+          {feeUnavailable && (
+            <p className="text-status-red text-xs flex items-center gap-1 mr-auto">
+              <AlertCircle className="w-3 h-3" /> Customer fee could not be loaded — the shown rate
+              would differ from the charged rate.
+            </p>
+          )}
           <button
             type="button"
             onClick={handleClear}
@@ -902,10 +941,11 @@ export function DashboardPage() {
           </button>
           <button
             onClick={handleProcess}
-            disabled={submitted}
+            disabled={submitted || feeUnavailable}
             className={cn(
               'text-sm font-semibold flex items-center gap-2 px-5 py-2.5 rounded-lg transition-all duration-150',
               submitted ? 'bg-status-green text-white cursor-default' : 'btn-primary',
+              feeUnavailable && 'opacity-50 cursor-not-allowed',
             )}
           >
             <CheckCircle2 className="w-4 h-4" />

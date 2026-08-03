@@ -63,6 +63,20 @@ export function minDecimalsFor(value: number): number {
   return Math.max(0, Math.ceil(-Math.log10(value * MAX_ROUNDING_STEP_RATIO)));
 }
 
+/**
+ * Floating point can land a hair off an exact rounding step (5.02 * 100 =
+ * 501.99999999999994), which would make FLOOR/CEIL move a full step away from
+ * a value that is already on the grid. Snap to the nearest integer when the
+ * difference is within 1 part in 1e12 — far below any real quote precision,
+ * far above accumulated float error.
+ */
+export function snapToStep(scaled: number): number {
+  const nearest = Math.round(scaled);
+  return nearest !== scaled && Math.abs(scaled - nearest) <= Math.abs(scaled) * 1e-12
+    ? nearest
+    : scaled;
+}
+
 /** Apply rounding to a value. If mode is not specified, uses the config's mode. */
 export function applyRounding(
   value: number,
@@ -79,8 +93,9 @@ export function applyRounding(
   if (decimals == null) return value;
 
   const factor = Math.pow(10, decimals);
-  if (mode === 'FLOOR') return Math.floor(value * factor) / factor;
-  return Math.ceil(value * factor) / factor;
+  const scaled = snapToStep(value * factor);
+  if (mode === 'FLOOR') return Math.floor(scaled) / factor;
+  return Math.ceil(scaled) / factor;
 }
 
 export interface BidAskResult {

@@ -3,6 +3,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { RatesService } from '../rates/rates.service';
 import { MultiSourceService } from '../rates/multi-source.service';
 import { FEE_POINT_VALUE } from '../rates/rates.constants';
+import { snapToStep } from '../rates/spread.util';
 
 export interface CreateTransactionDto {
   type: 'BUY' | 'SELL' | 'SWAP';
@@ -127,6 +128,12 @@ export class TransactionsService implements OnModuleInit {
   }
 
   async create(dto: CreateTransactionDto) {
+    // A non-positive or non-numeric amount would persist a corrupt COMPLETED
+    // record (NaN rateApplied for 0, negative payouts for < 0).
+    if (!Number.isFinite(dto.amountIn) || dto.amountIn <= 0) {
+      throw new BadRequestException('Amount must be greater than 0');
+    }
+
     // Validate customer exists
     const customer = await this.prisma.customer.findUnique({
       where: { id: dto.customerId },
@@ -243,6 +250,22 @@ export class TransactionsService implements OnModuleInit {
 
     const receiptId = `TX-${++this.receiptCounter}`;
 
+    // Persist what the teller actually pays out: the dashboard FLOORs the
+    // receive amount at the pair's configured rounding, so the ledger must
+    // match it. Without a configured rounding, keep 2dp nearest.
+    const roundingRow =
+      dto.quote === 'USD'
+        ? null
+        : await this.prisma.storeRate.findUnique({
+            where: { base_quote: { base: 'USD', quote: dto.quote } },
+            select: { roundingDecimals: true },
+          });
+    const outDecimals = roundingRow?.roundingDecimals ?? null;
+    const persistedOut =
+      outDecimals != null
+        ? Math.floor(snapToStep(amountOut * Math.pow(10, outDecimals))) / Math.pow(10, outDecimals)
+        : Number(amountOut.toFixed(2));
+
     const transaction = await this.prisma.transaction.create({
       data: {
         receiptId,
@@ -252,7 +275,7 @@ export class TransactionsService implements OnModuleInit {
         base: dto.base,
         quote: dto.quote,
         amountIn: dto.amountIn,
-        amountOut: Number(amountOut.toFixed(2)),
+        amountOut: persistedOut,
         rateApplied: Number(effectiveRate.toFixed(8)),
         spread: Number((baseRate?.spread ?? 0) + (quoteRate?.spread ?? 0)),
         status: 'COMPLETED',
