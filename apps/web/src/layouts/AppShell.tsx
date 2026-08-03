@@ -11,7 +11,8 @@ export function AppShell() {
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
-      <div className="flex flex-col flex-1 overflow-hidden">
+      {/* min-w-0 so wide tables scroll inside the page instead of stretching it */}
+      <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         <DisconnectedBanner />
         <Header />
         <main className="flex-1 overflow-y-auto p-6" role="main">

@@ -1,4 +1,9 @@
-import type { RateProvider, RateQuote } from './rate-provider.interface';
+import type {
+  RateProvider,
+  RateQuote,
+  MultiSourceProvider,
+  MultiSourceResult,
+} from './rate-provider.interface';
 
 /**
  * Mock provider that generates realistic FX rates with small random fluctuations.
@@ -85,5 +90,37 @@ export class MockRateProvider implements RateProvider {
         timestamp: now,
       };
     });
+  }
+}
+
+/**
+ * Board-facing face of the mock provider. Used only while the live-market API is
+ * unconfigured, so the rate board still renders in development instead of
+ * showing zero sources.
+ */
+export class MockMultiSourceProvider implements MultiSourceProvider {
+  readonly name = 'mock';
+  readonly label = 'Mock (dev)';
+
+  constructor(private readonly inner = new MockRateProvider()) {}
+
+  async fetchRates(base: string, quotes: string[]): Promise<MultiSourceResult> {
+    const started = Date.now();
+    const all = await this.inner.fetchRates(base);
+    const wanted = new Set(quotes);
+
+    return {
+      quotes: all
+        .filter((q) => wanted.has(q.quote))
+        .map((q) => ({
+          base: q.base,
+          quote: q.quote,
+          bid: q.bid,
+          ask: q.ask,
+          mid: q.mid,
+          timestamp: q.timestamp,
+        })),
+      latencyMs: Date.now() - started,
+    };
   }
 }

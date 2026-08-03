@@ -6,8 +6,6 @@ export type { CurrencyRate, MarketSummary } from './schemas/rate.schema';
 export {
   CustomerSchema,
   CreateCustomerSchema,
-  ExpiryStatus,
-  RiskLevel,
 } from './schemas/customer.schema';
 
 export {

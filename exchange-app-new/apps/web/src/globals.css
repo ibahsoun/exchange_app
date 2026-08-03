@@ -1,0 +1,206 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Theme CSS Variables ───────────────────────────────── */
+:root {
+  /* Dark theme (default) */
+  --terminal-bg: #080c16;
+  --terminal-card: #0f1629;
+  --terminal-surface: #141b2d;
+  --terminal-surface-2: #1a2236;
+  --terminal-border: #1c2840;
+  --terminal-border-light: #283650;
+
+  --text-primary: #e8edf5;
+  --text-secondary: #8b9dc3;
+  --text-muted: #5a6b87;
+  --text-inverse: #080c16;
+
+  --status-green-subtle: #052e16;
+  --status-red-subtle: #450a0a;
+  --status-yellow-subtle: #451a03;
+  --status-blue-subtle: #172554;
+
+  --primary-subtle: #172554;
+  --primary-muted: #1e40af;
+
+  --shadow-color: rgba(28, 40, 64, 0.6);
+  --shadow-drop: rgba(0, 0, 0, 0.35);
+  --shadow-drop-lg: rgba(0, 0, 0, 0.5);
+  --shadow-inner: rgba(255, 255, 255, 0.03);
+}
+
+.light {
+  --terminal-bg: #f0f4f8;
+  --terminal-card: #ffffff;
+  --terminal-surface: #f8fafc;
+  --terminal-surface-2: #f1f5f9;
+  --terminal-border: #e2e8f0;
+  --terminal-border-light: #cbd5e1;
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --text-inverse: #e8edf5;
+
+  --status-green-subtle: #dcfce7;
+  --status-red-subtle: #fee2e2;
+  --status-yellow-subtle: #fef3c7;
+  --status-blue-subtle: #dbeafe;
+
+  --primary-subtle: #dbeafe;
+  --primary-muted: #3b82f6;
+
+  --shadow-color: rgba(0, 0, 0, 0.08);
+  --shadow-drop: rgba(0, 0, 0, 0.08);
+  --shadow-drop-lg: rgba(0, 0, 0, 0.12);
+  --shadow-inner: rgba(255, 255, 255, 0.8);
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    min-height: 100vh;
+    overflow-x: hidden;
+    background: var(--terminal-bg);
+    color: var(--text-primary);
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--terminal-border);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--terminal-border-light);
+  }
+
+  /* Selection */
+  ::selection {
+    background: rgba(59, 130, 246, 0.3);
+  }
+}
+
+@layer components {
+  /* ─── Cards ─────────────────────────────────────────── */
+  .card {
+    @apply bg-terminal-card border border-terminal-border rounded-terminal shadow-terminal;
+  }
+
+  .card-header {
+    @apply flex items-center justify-between px-5 py-4 border-b border-terminal-border;
+  }
+
+  .card-icon {
+    @apply w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center;
+  }
+
+  .card-icon > svg {
+    @apply w-4 h-4 text-primary;
+  }
+
+  /* ─── Stat cards (inside cards or standalone) ─────── */
+  .stat-card {
+    @apply bg-terminal-surface border border-terminal-border rounded-terminal p-4 shadow-inner-light;
+  }
+
+  /* ─── Badges ────────────────────────────────────────── */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-semibold tracking-wide;
+  }
+
+  .badge-green {
+    @apply bg-status-green-subtle text-status-green;
+  }
+
+  .badge-red {
+    @apply bg-status-red-subtle text-status-red;
+  }
+
+  .badge-yellow {
+    @apply bg-status-yellow-subtle text-status-yellow;
+  }
+
+  .badge-blue {
+    @apply bg-status-blue-subtle text-status-blue;
+  }
+
+  /* ─── Buttons ───────────────────────────────────────── */
+  .btn-primary {
+    @apply bg-primary hover:bg-primary-hover text-white font-semibold px-4 py-2.5 rounded-lg
+           transition-all duration-150 shadow-glow-blue hover:shadow-none active:scale-[0.98];
+  }
+
+  .btn-outline {
+    @apply border border-terminal-border-light text-text-secondary hover:text-text-primary
+           hover:border-text-muted hover:bg-terminal-surface px-4 py-2.5 rounded-lg
+           transition-all duration-150;
+  }
+
+  .btn-ghost {
+    @apply text-text-secondary hover:text-text-primary hover:bg-terminal-surface
+           px-3 py-2 rounded-lg transition-colors;
+  }
+
+  /* ─── Inputs ────────────────────────────────────────── */
+  .input {
+    @apply w-full bg-terminal-surface-2 border border-terminal-border rounded-lg
+           px-4 py-2.5 text-text-primary placeholder-text-muted
+           outline-none focus:border-primary focus:ring-1 focus:ring-primary/30
+           transition-colors;
+  }
+
+  /* ─── Table headers ─────────────────────────────────── */
+  .table-header {
+    @apply text-xxs font-semibold uppercase tracking-wider text-text-muted;
+  }
+
+  /* ─── Divider ───────────────────────────────────────── */
+  .divider-v {
+    @apply w-px h-6 bg-terminal-border;
+  }
+
+  /* ─── Toggle switch ────────────────────────────────── */
+  .toggle-track {
+    @apply w-10 h-[22px] rounded-full bg-terminal-border relative cursor-pointer transition-colors;
+  }
+  .toggle-track[data-active='true'] {
+    @apply bg-primary;
+  }
+  .toggle-knob {
+    @apply w-4 h-4 rounded-full bg-text-muted absolute top-[3px] left-[3px] transition-all shadow-sm;
+  }
+  .toggle-track[data-active='true'] .toggle-knob {
+    @apply left-[21px] bg-white;
+  }
+}
+
+/* ─── Row flash animation (outside @layer so keyframes work) ── */
+@keyframes row-flash {
+  0%   { background-color: rgba(59, 130, 246, 0.12); }
+  100% { background-color: transparent; }
+}
+.row-flash {
+  animation: row-flash 1.2s ease-out;
+}

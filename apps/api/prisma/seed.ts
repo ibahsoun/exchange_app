@@ -383,13 +383,14 @@ async function main() {
   }
   console.log(`  ✓ ${defaultCurrencies.length} currencies`);
 
-  // ─── Rate Source (mock) ─────────────────────────────────
+  // ─── Rate Source (the single live feed) ─────────────────
+  const liveSource = process.env.LIVE_MARKET_SOURCE_KEY ?? 'betaserver';
   await prisma.rateSource.upsert({
-    where: { name: 'mock' },
+    where: { name: liveSource },
     update: {},
-    create: { name: 'mock', status: 'active', priority: 0 },
+    create: { name: liveSource, status: 'active', priority: 0 },
   });
-  console.log('  ✓ Rate source (mock)');
+  console.log(`  ✓ Rate source (${liveSource})`);
 
   console.log('✅ Seed complete!');
 }

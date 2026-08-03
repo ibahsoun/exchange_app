@@ -1,8 +1,14 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import type { RateProvider } from './providers';
-import { RATE_PROVIDER, SUPPORTED_PAIRS, TROY_OZ_TO_GRAMS, DEFAULT_BASE } from './rates.constants';
-import { computeBidAsk, spreadConfigFromRow } from './spread.util';
+import {
+  RATE_PROVIDER,
+  SUPPORTED_PAIRS,
+  TROY_OZ_TO_GRAMS,
+  DEFAULT_BASE,
+  LIVE_FEED_QUOTES,
+  pairMetaFor,
+} from './rates.constants';
 
 export interface LiveRate {
   base: string;
@@ -39,8 +45,8 @@ export class RatesService {
       await this.refreshRates();
     }
 
-    // Always re-apply manual spreads so changes are reflected immediately
-    await this.applyManualSpreads();
+    // Always re-apply operator-set rates so changes are reflected immediately
+    await this.applyStoreRates();
 
     const rates = Array.from(this.cache.values()).filter((r) => r.base === base);
 
@@ -66,9 +72,11 @@ export class RatesService {
     return rates;
   }
 
-  /** Get pair metadata */
-  getPairsMetadata() {
-    return SUPPORTED_PAIRS;
+  /** Get pair metadata for the currencies configured in Settings */
+  async getPairsMetadata() {
+    const currencies = await this.prisma.currency.findMany({ orderBy: { sortIndex: 'asc' } });
+    const quotes = currencies.filter((c) => c.code !== DEFAULT_BASE);
+    return quotes.length > 0 ? quotes.map((c) => pairMetaFor(c.code, c.name)) : SUPPORTED_PAIRS;
   }
 
   /** Get market summary */
@@ -136,7 +144,10 @@ export class RatesService {
 
   async refreshRates(): Promise<LiveRate[]> {
     try {
-      const quotes = await this.provider.fetchRates(DEFAULT_BASE);
+      // Only the feed pairs come from the API; the rest are operator-priced.
+      const quotes = (await this.provider.fetchRates(DEFAULT_BASE)).filter((q) =>
+        LIVE_FEED_QUOTES.includes(q.quote),
+      );
       const now = new Date().toISOString();
 
       // Ensure source exists in DB
@@ -158,13 +169,14 @@ export class RatesService {
 
         this.prevMids.set(key, q.mid);
 
+        // Single-rate model: every pair is quoted at one rate (the mid).
         this.cache.set(key, {
           base: q.base,
           quote: q.quote,
-          bid: q.bid,
-          ask: q.ask,
+          bid: q.mid,
+          ask: q.mid,
           mid: q.mid,
-          spread: q.spread,
+          spread: 0,
           trend,
           overridden: false,
           timestamp: now,
@@ -204,8 +216,8 @@ export class RatesService {
       // Apply any active overrides on top
       await this.applyOverrides();
 
-      // Apply manual spreads from StoreRate DB
-      await this.applyManualSpreads();
+      // Overlay operator-set rates from the StoreRate table
+      await this.applyStoreRates();
 
       this.logger.log(`Refreshed ${quotes.length} rates from ${this.provider.name}`);
 
@@ -236,34 +248,41 @@ export class RatesService {
 
   // ─── Internal ──────────────────────────────────────────────
 
-  private async applyManualSpreads() {
+  /**
+   * Overlay operator-set rates. Pairs off the live feed only exist here — the
+   * feed publishes USD/BRL alone, so every other pair is priced by whatever
+   * the operator saved on the Live Rates page.
+   */
+  private async applyStoreRates() {
     const storeRates = await this.prisma.storeRate.findMany({
-      where: {
-        OR: [
-          { mid: { gt: 0 } },
-          { spreadPercent: { gt: 0 } },
-          { spreadFixed: { gt: 0 } },
-          { buyMargin: { gt: 0 } },
-          { sellMargin: { gt: 0 } },
-        ],
-      },
+      where: { base: DEFAULT_BASE, mid: { gt: 0 } },
     });
+    const now = new Date().toISOString();
 
     for (const sr of storeRates) {
       const key = `${sr.base}/${sr.quote}`;
       const existing = this.cache.get(key);
-      if (!existing) continue;
+      const spread = Number(sr.spreadFixed) || 0;
 
-      const mid = Number(sr.mid) > 0 ? Number(sr.mid) : existing.mid;
-      const config = spreadConfigFromRow(sr);
-      const { bid, ask, spread } = computeBidAsk(mid, config, sr.quote);
+      // A feed-priced pair keeps following the live rate; the operator's
+      // spread still applies on top of it.
+      const followsFeed = sr.mode === 'AUTO_AVG' || sr.mode === 'MANUAL_SOURCE';
+      if (existing && followsFeed && LIVE_FEED_QUOTES.includes(sr.quote)) {
+        if (existing.spread !== spread) this.cache.set(key, { ...existing, spread });
+        continue;
+      }
 
+      const mid = Number(sr.mid);
       this.cache.set(key, {
-        ...existing,
+        base: sr.base,
+        quote: sr.quote,
+        bid: mid,
+        ask: mid,
         mid,
-        bid,
-        ask,
         spread,
+        trend: existing?.trend ?? 'stable',
+        overridden: false,
+        timestamp: existing?.timestamp ?? now,
       });
     }
   }
@@ -277,14 +296,14 @@ export class RatesService {
       const key = `${ov.base}/${ov.quote}`;
       const existing = this.cache.get(key);
       if (existing) {
-        const bid = Number(ov.bid);
-        const ask = Number(ov.ask);
+        // Single-rate model: an override collapses to its midpoint.
+        const mid = (Number(ov.bid) + Number(ov.ask)) / 2;
         this.cache.set(key, {
           ...existing,
-          bid,
-          ask,
-          mid: (bid + ask) / 2,
-          spread: ask - bid,
+          bid: mid,
+          ask: mid,
+          mid,
+          spread: 0,
           overridden: true,
         });
       }

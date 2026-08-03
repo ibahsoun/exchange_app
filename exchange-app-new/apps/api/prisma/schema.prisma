@@ -1,0 +1,188 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Rate system ─────────────────────────────────────────────
+
+model RateSource {
+  id        String   @id @default(cuid())
+  name      String   @unique          // "mock", "currencyfreaks"
+  status    String   @default("active") // active, disabled, error
+  priority  Int      @default(0)
+  config    Json?                      // provider-specific config (API keys etc)
+  rates     Rate[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Rate {
+  id        String     @id @default(cuid())
+  base      String                     // "USD"
+  quote     String                     // "EUR"
+  bid       Decimal    @db.Decimal(18, 8)
+  ask       Decimal    @db.Decimal(18, 8)
+  mid       Decimal    @db.Decimal(18, 8)
+  spread    Decimal    @db.Decimal(18, 8)
+  sourceId  String
+  source    RateSource @relation(fields: [sourceId], references: [id])
+  timestamp DateTime   @default(now())
+
+  @@unique([base, quote, sourceId])
+  @@index([base, quote])
+  @@index([timestamp])
+}
+
+model RateSnapshot {
+  id        String   @id @default(cuid())
+  base      String
+  quote     String
+  bid       Decimal  @db.Decimal(18, 8)
+  ask       Decimal  @db.Decimal(18, 8)
+  mid       Decimal  @db.Decimal(18, 8)
+  source    String
+  timestamp DateTime @default(now())
+
+  @@index([base, quote, timestamp])
+}
+
+model ManualOverride {
+  id        String   @id @default(cuid())
+  base      String
+  quote     String
+  bid       Decimal  @db.Decimal(18, 8)
+  ask       Decimal  @db.Decimal(18, 8)
+  enabled   Boolean  @default(true)
+  reason    String?
+  userId    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([base, quote])
+}
+
+// ─── Multi-source rate comparison ────────────────────────────
+
+model RateTick {
+  id        String   @id @default(cuid())
+  base      String                        // "USD"
+  quote     String                        // "EUR"
+  source    String                        // "currencyfreaks"
+  bid       Decimal? @db.Decimal(18, 8)   // nullable — some sources only provide mid
+  ask       Decimal? @db.Decimal(18, 8)
+  mid       Decimal  @db.Decimal(18, 8)
+  latencyMs Int                           // fetch latency in ms
+  timestamp DateTime @default(now())
+
+  @@index([base, quote, source])
+  @@index([timestamp])
+}
+
+model StoreRate {
+  id            String   @id @default(cuid())
+  base          String                        // "USD"
+  quote         String                        // "EUR"
+  mid           Decimal  @db.Decimal(18, 8)
+  mode          String   @default("AUTO_AVG") // AUTO_AVG, MANUAL_SOURCE, CUSTOM_VALUE, LOCKED
+  sourceHint    String?                       // which source if MANUAL_SOURCE
+  reason        String?                       // why locked/custom
+  updatedBy     String?
+  spreadType    String   @default("PERCENTAGE") // PERCENTAGE | FIXED
+  spreadMode    String   @default("SYMMETRIC")  // SYMMETRIC | ASYMMETRIC
+  fixedUnit     String   @default("RAW")
+  spreadPercent Decimal  @db.Decimal(18, 8) @default(0)
+  spreadFixed   Decimal  @db.Decimal(18, 8) @default(0)
+  buyMargin     Decimal  @db.Decimal(18, 8) @default(0)
+  sellMargin    Decimal  @db.Decimal(18, 8) @default(0)
+  roundingDecimals Int?                       // null = no rounding
+  roundingMode     String?                    // "FLOOR" | "CEIL"
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([base, quote])
+}
+
+// ─── Currency configuration ─────────────────────────────────────
+
+model Currency {
+  id        String   @id @default(cuid())
+  code      String   @unique          // "USD", "BRL"
+  name      String                    // "US Dollar"
+  symbol    String                    // "$", "R$"
+  color     String   @default("bg-gray-600") // Tailwind bg class for UI
+  sortIndex Int      @default(0)      // display order in dropdowns
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Customer Level Points (per-pair pricing tiers) ─────────
+
+model CustomerLevelPoint {
+  id         String  @id @default(cuid())
+  base       String                          // "USD"
+  quote      String                          // "EUR"
+  level      Int                             // 1-5 star rating
+  points     Decimal @db.Decimal(18, 8) @default(0) // fee value
+  pointsType String  @default("PERCENTAGE")  // PERCENTAGE | FIXED
+  fixedUnit  String  @default("RAW")
+
+  @@unique([base, quote, level])
+  @@index([base, quote])
+}
+
+// ─── Receiving Destinations ──────────────────────────────────
+
+model Destination {
+  id             String        @id @default(cuid())
+  name           String        @unique
+  commission     Decimal       @db.Decimal(18, 8) @default(0)
+  commissionType String        @default("PERCENTAGE")  // PERCENTAGE | FIXED
+  fixedUnit      String        @default("RAW")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  transactions   Transaction[]
+}
+
+// ─── Existing models ─────────────────────────────────────────
+
+model Customer {
+  id           String        @id @default(cuid())
+  customerId   String        @unique
+  name         String
+  phone        String?
+  email        String?
+  level        Int           @default(3) // 1-5 star rating
+  transactions Transaction[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model Transaction {
+  id            String       @id @default(cuid())
+  receiptId     String       @unique
+  customerId    String
+  customer      Customer     @relation(fields: [customerId], references: [id])
+  destinationId String?
+  destination   Destination? @relation(fields: [destinationId], references: [id])
+  type          String                        // BUY, SELL, SWAP
+  base          String                        // base currency code
+  quote         String                        // quote currency code
+  amountIn      Decimal      @db.Decimal(18, 2)   // customer pays
+  amountOut     Decimal      @db.Decimal(18, 2)   // customer receives
+  rateApplied   Decimal      @db.Decimal(18, 8)   // effective rate applied
+  spread        Decimal      @db.Decimal(18, 8)   // spread at time of trade
+  status        String       @default("PENDING")  // COMPLETED, PENDING, FAILED, CANCELLED
+  tellerId      String?                       // teller who processed
+  createdAt     DateTime     @default(now())
+
+  @@index([customerId])
+  @@index([destinationId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([base, quote])
+}
+

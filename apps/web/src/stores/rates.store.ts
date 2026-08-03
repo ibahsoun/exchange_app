@@ -48,6 +48,7 @@ export const useRatesStore = create<RatesState>((set, get) => ({
   summary: null,
   connected: false,
   lastUpdated: null,
+  lastSyncAt: null,
 
   setRates: (rates) =>
     set({ rates, lastUpdated: new Date().toISOString() }),
@@ -55,6 +56,8 @@ export const useRatesStore = create<RatesState>((set, get) => ({
   setSummary: (summary) => set({ summary }),
 
   setConnected: (connected) => set({ connected }),
+
+  setLastSyncAt: (lastSyncAt) => set({ lastSyncAt }),
 
   getRate: (base, quote) =>
     get().rates.find((r) => r.base === base && r.quote === quote),

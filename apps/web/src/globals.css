@@ -112,6 +112,10 @@
     @apply flex items-center justify-between px-5 py-4 border-b border-terminal-border;
   }
 
+  .card-footer {
+    @apply flex items-center justify-end gap-3 px-5 py-4 border-t border-terminal-border;
+  }
+
   .card-icon {
     @apply w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center;
   }
@@ -169,6 +173,51 @@
            px-4 py-2.5 text-text-primary placeholder-text-muted
            outline-none focus:border-primary focus:ring-1 focus:ring-primary/30
            transition-colors;
+  }
+
+  /* ─── Field shell (input + inline currency pill) ────── */
+  .field-box {
+    @apply flex items-center bg-terminal-bg border border-terminal-border rounded-lg
+           transition-colors focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/25;
+  }
+
+  .field-box[data-invalid='true'] {
+    @apply border-status-red focus-within:border-status-red focus-within:ring-status-red/25;
+  }
+
+  .field-input {
+    @apply flex-1 min-w-0 bg-transparent border-0 outline-none px-4 py-3
+           text-[22px] leading-none font-mono font-semibold tabular-nums;
+  }
+
+  /* ─── Select trigger (customer / destination) ───────── */
+  .select-trigger {
+    @apply w-full flex items-center justify-between gap-3 bg-terminal-bg border border-terminal-border
+           rounded-lg px-4 py-3 text-left text-sm outline-none cursor-pointer
+           transition-colors hover:border-terminal-border-light focus:border-primary;
+  }
+
+  /* ─── Quote panel (market / bid / ask) ──────────────── */
+  .quote-panel {
+    @apply rounded-lg border border-terminal-border bg-terminal-bg divide-y divide-terminal-border;
+  }
+
+  .quote-row {
+    @apply flex items-center justify-between gap-4 px-4 py-2.5;
+  }
+
+  /* ─── Chips (compact mono metadata) ─────────────────── */
+  .chip {
+    @apply inline-flex items-center rounded-md px-2 py-[3px] text-[10px] font-mono font-semibold
+           tracking-wide whitespace-nowrap;
+  }
+
+  .chip-blue {
+    @apply bg-primary/10 text-status-blue;
+  }
+
+  .chip-amber {
+    @apply bg-status-yellow/10 text-status-yellow;
   }
 
   /* ─── Table headers ─────────────────────────────────── */

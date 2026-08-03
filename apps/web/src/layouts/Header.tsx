@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Moon, Sun, RefreshCw } from 'lucide-react';
 import { useRatesConnected } from '@/hooks/useRates';
 import { useTheme } from '@/contexts/ThemeContext';
-import { schedulerApi } from '@/lib/api';
+import { multiSourceApi } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 function useClock() {
@@ -23,7 +23,7 @@ export function Header() {
   const handleFetchRates = useCallback(async () => {
     setFetching(true);
     try {
-      await schedulerApi.fetchOnce();
+      await multiSourceApi.refresh();
     } catch {
       // ignore
     } finally {
@@ -32,14 +32,15 @@ export function Header() {
   }, []);
 
   const time = now.toLocaleTimeString('en-US', {
-    hour12: false,
-    hour: '2-digit',
+    hour12: true,
+    hour: 'numeric',
     minute: '2-digit',
     second: '2-digit',
   });
 
   const date = now
     .toLocaleDateString('en-US', {
+      weekday: 'short',
       month: 'short',
       day: '2-digit',
       year: 'numeric',
@@ -47,7 +48,7 @@ export function Header() {
     .toUpperCase();
 
   return (
-    <header className="h-[52px] min-h-[52px] bg-terminal-card border-b border-terminal-border flex items-center justify-between px-6">
+    <header className="h-[60px] min-h-[60px] bg-terminal-card border-b border-terminal-border flex items-center justify-between px-6">
       {/* ── Left cluster ──────────────────────────────── */}
       <div className="flex items-center gap-0">
         {/* API status */}
@@ -69,10 +70,10 @@ export function Header() {
       <div className="flex items-center">
         {/* Clock */}
         <div className="text-right mr-5">
-          <div className="text-[15px] font-mono font-bold text-text-primary leading-tight tracking-wider">
+          <div className="text-[20px] font-mono font-bold text-text-primary leading-none tracking-[0.08em] tabular-nums">
             {time}
           </div>
-          <div className="text-xxs text-text-muted tracking-wider">{date}</div>
+          <div className="text-xxs text-text-muted tracking-[0.12em] mt-1">{date}</div>
         </div>
 
         {/* Fetch rates */}

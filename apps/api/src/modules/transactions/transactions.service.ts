@@ -1,6 +1,8 @@
-import { Injectable, Inject, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, Inject, BadRequestException, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RatesService } from '../rates/rates.service';
+import { MultiSourceService } from '../rates/multi-source.service';
+import { FEE_POINT_VALUE } from '../rates/rates.constants';
 
 export interface CreateTransactionDto {
   type: 'BUY' | 'SELL' | 'SWAP';
@@ -8,6 +10,7 @@ export interface CreateTransactionDto {
   quote: string;
   amountIn: number;
   customerId: string;
+  destinationId?: string;
 }
 
 export interface TransactionFilters {
@@ -20,14 +23,29 @@ export interface TransactionFilters {
 }
 
 @Injectable()
-export class TransactionsService {
+export class TransactionsService implements OnModuleInit {
   private readonly logger = new Logger(TransactionsService.name);
-  private receiptCounter = 99282;
+  private receiptCounter = 0;
 
   constructor(
     @Inject(PrismaService) private prisma: PrismaService,
     @Inject(RatesService) private ratesService: RatesService,
+    @Inject(MultiSourceService) private multiSourceService: MultiSourceService,
   ) {}
+
+  async onModuleInit() {
+    const last = await this.prisma.transaction.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { receiptId: true },
+    });
+    if (last?.receiptId) {
+      const num = parseInt(last.receiptId.replace('TX-', ''), 10);
+      if (!isNaN(num)) {
+        this.receiptCounter = num;
+      }
+    }
+    this.logger.log(`Receipt counter initialized at ${this.receiptCounter}`);
+  }
 
   async findAll(filters: TransactionFilters = {}) {
     const { search, status, from, to, page = 1, limit = 25 } = filters;
@@ -133,29 +151,92 @@ export class TransactionsService {
     }
 
     // Calculate conversion
-    // For USD/<currency> pairs: bid = how many units of <currency> per 1 USD
-    // Converting base → USD: divide by the pair's ask (customer sells base, we buy)
-    // Converting USD → quote: multiply by the pair's bid (customer buys quote, we sell)
+    // Single-rate model: each USD/<currency> pair has one rate (the mid).
+    // The % moves the rate against the customer; the customer's points are
+    // their spread (1pt = 0.01) and the pair spread is a discount for
+    // everyone — both come back toward (or past) the market.
+    // Example: rate 5.17, fee 1%, 2pt → customer pays 5.17 + 0.0517 − 0.02
+    // = 5.2017 per USD, and receives 5.1383 in the other direction.
     let amountOut: number;
     let effectiveRate: number;
-    let spread: number;
+
+    // The customer's fee for this pair. Points are values in the fee's stored
+    // orientation, so each branch applies them on whichever side the fee was
+    // configured for.
+    const fee = await this.multiSourceService.getCustomerPairFee(customer.id, dto.base, dto.quote);
+    const feeOffset = (mid: number) =>
+      fee ? (mid * fee.percent) / 100 - fee.points * FEE_POINT_VALUE : 0;
+
+    // Fetch destination commission if provided
+    const destination = dto.destinationId
+      ? await this.prisma.destination.findUnique({ where: { id: dto.destinationId } })
+      : null;
+
+    // Destination commission — applied as flat fee on final amount, not as rate modifier
+    const destFlatFee = (dest: { commission: unknown; commissionType: string } | null) => {
+      if (!dest) return 0;
+      const comm = Number(dest.commission);
+      if (!comm || comm <= 0) return 0;
+      if (dest.commissionType === 'FIXED') {
+        return comm;
+      }
+      return 0; // percentage handled separately
+    };
+    const destPercentage = destination && destination.commissionType === 'PERCENTAGE' && Number(destination.commission) > 0
+      ? Number(destination.commission) : 0;
 
     if (dto.base === 'USD' && quoteRate) {
-      // USD → foreign: multiply by bid
-      amountOut = dto.amountIn * quoteRate.bid;
-      effectiveRate = quoteRate.bid;
-      spread = quoteRate.spread;
-    } else if (dto.quote === 'USD' && baseRate) {
-      // Foreign → USD: divide by ask
-      amountOut = dto.amountIn / baseRate.ask;
-      effectiveRate = 1 / baseRate.ask;
-      spread = baseRate.spread;
-    } else if (baseRate && quoteRate) {
-      // Foreign → Foreign: go through USD
-      const usdAmount = dto.amountIn / baseRate.ask;
-      amountOut = usdAmount * quoteRate.bid;
+      // USD → foreign: customer receives the quote; the pair spread is a
+      // discount, so it raises what they get
+      const marketAdj = quoteRate.mid + quoteRate.spread;
+      if (fee && fee.base === dto.quote) {
+        // Fee stored on the inverted pair — apply it on that side.
+        amountOut = dto.amountIn / (1 / marketAdj + feeOffset(1 / quoteRate.mid));
+      } else {
+        amountOut = dto.amountIn * (marketAdj - feeOffset(quoteRate.mid));
+      }
+      // Apply destination fee as flat amount or percentage on converted amount
+      if (destPercentage > 0) {
+        amountOut = amountOut * (1 - destPercentage / 100);
+      } else {
+        amountOut = amountOut - destFlatFee(destination);
+      }
       effectiveRate = amountOut / dto.amountIn;
-      spread = baseRate.spread + quoteRate.spread;
+    } else if (dto.quote === 'USD' && baseRate) {
+      // Foreign → USD: customer pays the base leg; the pair spread is a
+      // discount, so it lowers what they pay
+      const marketAdj = baseRate.mid - baseRate.spread;
+      if (fee && fee.base === dto.base) {
+        // Fee stored on the flipped pair — apply it on that side.
+        amountOut = dto.amountIn * (1 / marketAdj - feeOffset(1 / baseRate.mid));
+      } else {
+        amountOut = dto.amountIn / (marketAdj + feeOffset(baseRate.mid));
+      }
+      // Apply destination fee as flat amount or percentage on converted amount
+      if (destPercentage > 0) {
+        amountOut = amountOut * (1 - destPercentage / 100);
+      } else {
+        amountOut = amountOut - destFlatFee(destination);
+      }
+      effectiveRate = amountOut / dto.amountIn;
+    } else if (baseRate && quoteRate) {
+      // Foreign → Foreign: go through USD; each leg's spread is a discount to
+      // the customer (they pay the base leg, receive the quote leg)
+      const crossAdj = (quoteRate.mid + quoteRate.spread) / (baseRate.mid - baseRate.spread);
+      const crossMid = quoteRate.mid / baseRate.mid;
+      if (fee && fee.base === dto.quote) {
+        // Fee stored on the inverted pair — apply it on that side.
+        amountOut = dto.amountIn / (1 / crossAdj + feeOffset(1 / crossMid));
+      } else {
+        amountOut = dto.amountIn * (crossAdj - feeOffset(crossMid));
+      }
+      // Apply destination fee as flat amount or percentage on converted amount
+      if (destPercentage > 0) {
+        amountOut = amountOut * (1 - destPercentage / 100);
+      } else {
+        amountOut = amountOut - destFlatFee(destination);
+      }
+      effectiveRate = amountOut / dto.amountIn;
     } else {
       throw new BadRequestException(`Cannot calculate rate for ${dto.base}/${dto.quote}`);
     }
@@ -166,13 +247,14 @@ export class TransactionsService {
       data: {
         receiptId,
         customerId: dto.customerId,
+        destinationId: dto.destinationId || null,
         type: dto.type,
         base: dto.base,
         quote: dto.quote,
         amountIn: dto.amountIn,
         amountOut: Number(amountOut.toFixed(2)),
         rateApplied: Number(effectiveRate.toFixed(8)),
-        spread: Number(spread),
+        spread: Number((baseRate?.spread ?? 0) + (quoteRate?.spread ?? 0)),
         status: 'COMPLETED',
         tellerId: 'TELLER-04A',
       },

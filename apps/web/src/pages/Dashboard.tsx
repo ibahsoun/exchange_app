@@ -4,14 +4,13 @@ import {
   CheckCircle2,
   ChevronDown,
   AlertCircle,
-  Activity,
   User,
   Search,
   Eraser,
 } from 'lucide-react';
 import { cn, formatRate, formatAmount } from '@/lib/utils';
 import { useToast } from '@/components/Toast';
-import { transactionsApi, customersApi, currenciesApi, spreadApi, VALID_BASES, type SpreadRow, type Currency } from '@/lib/api';
+import { transactionsApi, customersApi, currenciesApi, spreadApi, customerFeesApi, destinationsApi, VALID_BASES, FEE_POINT_VALUE, type SpreadRow, type Currency, type CustomerPairFee, type Destination } from '@/lib/api';
 
 /** Generate a transaction reference */
 function generateRef() {
@@ -35,11 +34,12 @@ interface StoredDashboardForm {
   receiveAmount: string;
   editDirection: 'pay' | 'receive';
   selectedCustomerId: string;
+  selectedDestinationId?: string;
 }
 
 const DEFAULT_PAY = '1000.00';
 const DEFAULT_PAY_CURRENCY = 'USD';
-const DEFAULT_RECEIVE_CURRENCY = 'EUR';
+const DEFAULT_RECEIVE_CURRENCY = 'BRL';
 
 function getStoredDashboardForm(): StoredDashboardForm | null {
   try {
@@ -67,6 +67,16 @@ function saveDashboardForm(form: StoredDashboardForm): void {
   try {
     localStorage.setItem(DASHBOARD_FORM_KEY, JSON.stringify(form));
   } catch { /* ignore */ }
+}
+
+/** Star rating rendered as filled/empty glyphs */
+function Stars({ level }: { level: number }) {
+  return (
+    <span className="text-status-yellow text-[12px] leading-none tracking-tight flex-shrink-0">
+      {'★'.repeat(level)}
+      {'☆'.repeat(Math.max(0, 5 - level))}
+    </span>
+  );
 }
 
 // ─── Types ──────────────────────────────────────────────────
@@ -109,12 +119,30 @@ export function DashboardPage() {
   }, [currencies]);
 
   useEffect(() => {
-    currenciesApi.list().then(setCurrencies).catch(console.error);
+    currenciesApi
+      .list()
+      .then((list) => {
+        setCurrencies(list);
+        // A currency removed in Configuration may still be saved in this
+        // browser — fall back rather than quoting a pair that no longer exists.
+        const codes = list.map((c) => c.code);
+        if (codes.length > 0) {
+          setPayCurrency((c) =>
+            codes.includes(c) ? c : (codes.includes(DEFAULT_PAY_CURRENCY) ? DEFAULT_PAY_CURRENCY : codes[0]),
+          );
+          setReceiveCurrency((c) =>
+            codes.includes(c)
+              ? c
+              : (codes.includes(DEFAULT_RECEIVE_CURRENCY) ? DEFAULT_RECEIVE_CURRENCY : codes[0]),
+          );
+        }
+      })
+      .catch(console.error);
   }, []);
 
   // ─── Customer list & selection ─────────────────────────
   const [customerList, setCustomerList] = useState<
-    { id: string; name: string; customerId: string }[]
+    { id: string; name: string; customerId: string; level: number }[]
   >([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState(
     stored?.selectedCustomerId ?? '',
@@ -125,10 +153,10 @@ export function DashboardPage() {
 
   useEffect(() => {
     customersApi
-      .list({ limit: '100' })
+      .list({ limit: '1000' })
       .then((res) => {
-        const customers = (res.items as { id: string; name: string; customerId: string }[]).map(
-          (c) => ({ id: c.id, name: c.name, customerId: c.customerId }),
+        const customers = (res.items as { id: string; name: string; customerId: string; level?: number }[]).map(
+          (c) => ({ id: c.id, name: c.name, customerId: c.customerId, level: c.level ?? 3 }),
         );
         setCustomerList(customers);
         if (customers.length > 0 && !selectedCustomerId) {
@@ -136,6 +164,17 @@ export function DashboardPage() {
         }
       })
       .catch(console.error);
+  }, []);
+
+  // ─── Destination list & selection ─────────────────────
+  const [destinations, setDestinations] = useState<Destination[]>([]);
+  const [selectedDestinationId, setSelectedDestinationId] = useState(
+    stored?.selectedDestinationId ?? '',
+  );
+  const [destDropdownOpen, setDestDropdownOpen] = useState(false);
+
+  useEffect(() => {
+    destinationsApi.list().then(setDestinations).catch(console.error);
   }, []);
 
   // Persist form state so it survives navigation
@@ -147,6 +186,7 @@ export function DashboardPage() {
       receiveAmount,
       editDirection,
       selectedCustomerId,
+      selectedDestinationId,
     });
   }, [
     payCurrency,
@@ -155,6 +195,7 @@ export function DashboardPage() {
     receiveAmount,
     editDirection,
     selectedCustomerId,
+    selectedDestinationId,
   ]);
 
   // ─── UI state ──────────────────────────────────────────
@@ -191,6 +232,28 @@ export function DashboardPage() {
     return () => window.removeEventListener('focus', onFocus);
   }, [fetchPricing]);
 
+  // ─── The selected customer's fee for the selected pair ─
+  const [pairFee, setPairFee] = useState<CustomerPairFee | null>(null);
+
+  useEffect(() => {
+    if (!selectedCustomerId || payCurrency === receiveCurrency) {
+      setPairFee(null);
+      return;
+    }
+    let cancelled = false;
+    customerFeesApi
+      .getForCustomer(selectedCustomerId, payCurrency, receiveCurrency)
+      .then((fee) => {
+        if (!cancelled) setPairFee(fee.points > 0 || fee.percent > 0 ? fee : null);
+      })
+      .catch(() => {
+        if (!cancelled) setPairFee(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCustomerId, payCurrency, receiveCurrency]);
+
   // Lookup returns backend-computed bid/ask/mid — no frontend spread math
   const pricingMap = useMemo(() => {
     const m = new Map<string, SpreadRow>();
@@ -199,12 +262,12 @@ export function DashboardPage() {
   }, [pricing]);
 
   // Rounding helper: apply per-pair rounding to a value
+  // Rounding helper: FLOOR for amounts the customer receives (house-favourable)
   const applyRounding = useCallback((value: number, currency: string): number => {
     const cfg = pricingMap.get(currency);
-    if (!cfg || cfg.roundingDecimals == null || !cfg.roundingMode) return value;
+    if (!cfg || cfg.roundingDecimals == null) return value;
     const factor = Math.pow(10, cfg.roundingDecimals);
-    if (cfg.roundingMode === 'FLOOR') return Math.floor(value * factor) / factor;
-    return Math.ceil(value * factor) / factor;
+    return Math.floor(value * factor) / factor;
   }, [pricingMap]);
 
   // Format rate respecting per-pair rounding decimals
@@ -228,59 +291,117 @@ export function DashboardPage() {
   // ─── Bidirectional conversion ──────────────────────
   const conversionResult = useMemo(() => {
     const sourceAmount = editDirection === 'pay' ? payAmount : receiveAmount;
-    const amount = parseFloat(sourceAmount);
+    // Amounts may carry thousands separators (e.g. "5,101.90")
+    const amount = parseFloat(sourceAmount.replace(/,/g, ''));
     if (isNaN(amount) || amount <= 0) return null;
     if (payCurrency === receiveCurrency)
-      return { rate: 1, midRate: 1, bidRate: 1, askRate: 1, rateLabel: 'bid' as const, computedPay: amount, computedReceive: amount };
+      return { rate: 1, midRate: 1, feeRate: 1, feePoints: 0, feePercent: 0, equation: null, destCommission: 0, destCommissionType: 'PERCENTAGE' as const, computedPay: amount, computedReceive: amount };
 
     // All rates are BASE/QUOTE (how many QUOTE per 1 BASE).
-    // BASE is the selected baseCurrency (default USD).
-    // bid/ask/mid come pre-computed from backend using the same
-    // storeRate + spreadConfig as LiveRates and SpreadSettings.
-    const BASE_UNIT: Pick<SpreadRow, 'bid' | 'ask' | 'mid'> = { bid: 1, ask: 1, mid: 1 };
+    // Single-rate model: each pair has one rate (the mid) from the backend.
+    const BASE_UNIT: Pick<SpreadRow, 'mid' | 'spreadFixed'> = { mid: 1, spreadFixed: 0 };
     const payPricing = payCurrency === baseCurrency ? BASE_UNIT : pricingMap.get(payCurrency);
     const recvPricing = receiveCurrency === baseCurrency ? BASE_UNIT : pricingMap.get(receiveCurrency);
     if (!payPricing || !recvPricing) return null;
 
-    // "Customer pays X" = customer SELLS X to us.
-    //   When selling BASE → quote rate bid  (customer gets fewer QUOTE)
-    //   When selling QUOTE → quote rate ask  (customer gives more QUOTE per BASE)
+    // The pair's rate in pay → receive orientation. Each leg's spread is a
+    // discount to the customer: they pay the pay leg, receive the receive leg.
+    const crossMid = recvPricing.mid / payPricing.mid;
+    const crossAdj =
+      (recvPricing.mid + (recvPricing.spreadFixed || 0)) /
+      (payPricing.mid - (payPricing.spreadFixed || 0));
+
+    // The customer's fee — % against the customer, their points as a spread
+    // discount — in the orientation the fee was stored (mirrors the backend)
+    const feeOffset = (mid: number) =>
+      pairFee ? (mid * pairFee.percent) / 100 - pairFee.points * FEE_POINT_VALUE : 0;
+    let feeRate: number;
+    // TEMP: equation breakdown shown on the dashboard — remove when done debugging
+    // `perPay` = the rate is quoted as receive-per-pay, so amount out = pay × rate
+    let equation: { unit: string; perPay: boolean; terms: { label: string; value: number }[]; result: number };
+    if (pairFee && pairFee.base === receiveCurrency) {
+      feeRate = 1 / (1 / crossAdj + feeOffset(1 / crossMid));
+      // Fee stored on the flipped pair — the linear equation lives in that orientation
+      const invMid = 1 / crossMid;
+      equation = {
+        unit: `${payCurrency} per ${receiveCurrency}`,
+        perPay: false,
+        terms: [
+          { label: 'market rate', value: invMid },
+          { label: 'pair spread', value: 1 / crossAdj - invMid },
+          { label: `fee ${pairFee.percent}%`, value: (invMid * pairFee.percent) / 100 },
+          { label: `customer spread (${pairFee.points}pt)`, value: -pairFee.points * FEE_POINT_VALUE },
+        ],
+        result: 1 / feeRate,
+      };
+    } else {
+      feeRate = crossAdj - feeOffset(crossMid);
+      equation = {
+        unit: `${receiveCurrency} per ${payCurrency}`,
+        perPay: true,
+        terms: [
+          { label: 'market rate', value: crossMid },
+          { label: 'pair spread', value: crossAdj - crossMid },
+          { label: `fee ${pairFee?.percent ?? 0}%`, value: -(crossMid * (pairFee?.percent ?? 0)) / 100 },
+          { label: `customer spread (${pairFee?.points ?? 0}pt)`, value: (pairFee?.points ?? 0) * FEE_POINT_VALUE },
+        ],
+        result: feeRate,
+      };
+    }
+
+    // Destination commission (4th layer) — flat fee on final amount, not a rate modifier
+    const dest = destinations.find((d) => d.id === selectedDestinationId);
+    const destFlatFee = (commission: number, type: string) => {
+      if (!commission || commission <= 0) return 0;
+      if (type === 'FIXED') return commission;
+      return 0; // percentage handled separately below
+    };
+    const destPercentage = dest && dest.commissionType === 'PERCENTAGE' && dest.commission > 0 ? dest.commission : 0;
 
     let computedPay: number;
     let computedReceive: number;
 
     if (editDirection === 'pay') {
-      const baseAmount = payCurrency === baseCurrency ? amount : amount / payPricing.ask;
-      computedReceive = receiveCurrency === baseCurrency ? baseAmount : baseAmount * recvPricing.bid;
+      computedReceive = amount * feeRate;
+      // Apply destination commission as flat fee or percentage on the converted amount
+      if (dest) {
+        if (destPercentage > 0) {
+          computedReceive = computedReceive * (1 - destPercentage / 100);
+        } else {
+          computedReceive = computedReceive - destFlatFee(dest.commission, dest.commissionType);
+        }
+      }
       computedReceive = applyRounding(computedReceive, receiveCurrency);
       computedPay = amount;
     } else {
-      const baseAmount = receiveCurrency === baseCurrency ? amount : amount / recvPricing.bid;
-      computedPay = payCurrency === baseCurrency ? baseAmount : baseAmount * payPricing.ask;
+      computedPay = amount / feeRate;
+      // Apply destination commission as flat fee or percentage on the converted amount
+      if (dest) {
+        if (destPercentage > 0) {
+          computedPay = computedPay * (1 + destPercentage / 100);
+        } else {
+          computedPay = computedPay + destFlatFee(dest.commission, dest.commissionType);
+        }
+      }
       computedPay = applyRounding(computedPay, payCurrency);
       computedReceive = amount;
     }
 
-    // Mid-rate for display: 1 PAY → midPay BASE → midPay × midRecv RECV
-    const midPay = payCurrency === baseCurrency ? 1 : 1 / payPricing.mid;
-    const midRecv = receiveCurrency === baseCurrency ? 1 : recvPricing.mid;
-    const midRate = midPay * midRecv;
-
-    // Bid rate: 1 PAY → RECV using bid prices
-    const bidRate =
-      (payCurrency === baseCurrency ? 1 : 1 / payPricing.bid) *
-      (receiveCurrency === baseCurrency ? 1 : recvPricing.bid);
-
-    // Ask rate: 1 PAY → RECV using ask prices
-    const askRate =
-      (payCurrency === baseCurrency ? 1 : 1 / payPricing.ask) *
-      (receiveCurrency === baseCurrency ? 1 : recvPricing.ask);
-
     const customerRate = computedReceive / computedPay;
-    const rateLabel: 'bid' | 'ask' = payCurrency === baseCurrency ? 'bid' : 'ask';
 
-    return { rate: customerRate, midRate, bidRate, askRate, rateLabel, computedPay, computedReceive };
-  }, [payAmount, receiveAmount, editDirection, payCurrency, receiveCurrency, baseCurrency, pricingMap, applyRounding]);
+    return {
+      rate: customerRate,
+      midRate: crossMid,
+      feeRate,
+      feePoints: pairFee?.points ?? 0,
+      feePercent: pairFee?.percent ?? 0,
+      equation,
+      destCommission: dest?.commission ?? 0,
+      destCommissionType: dest?.commissionType ?? 'PERCENTAGE',
+      computedPay,
+      computedReceive,
+    };
+  }, [payAmount, receiveAmount, editDirection, payCurrency, receiveCurrency, baseCurrency, pricingMap, applyRounding, pairFee, destinations, selectedDestinationId]);
 
   // ─── Swap currencies ──────────────────────────────────
   const handleSwap = useCallback(() => {
@@ -300,7 +421,7 @@ export function DashboardPage() {
   const validate = useCallback((): boolean => {
     const errs: FormErrors = {};
     const sourceAmount = editDirection === 'pay' ? payAmount : receiveAmount;
-    const amt = parseFloat(sourceAmount);
+    const amt = parseFloat(sourceAmount.replace(/,/g, ''));
 
     if (!sourceAmount.trim() || isNaN(amt)) {
       errs.amount = 'Enter a valid amount';
@@ -343,6 +464,7 @@ export function DashboardPage() {
         quote: receiveCurrency,
         amountIn: conversionResult.computedPay,
         customerId: selectedCustomerId,
+        destinationId: selectedDestinationId || undefined,
       });
       setSubmitted(true);
       toast('success', `Transaction ${ref} submitted — ${payCurrency} → ${receiveCurrency}`);
@@ -371,349 +493,462 @@ export function DashboardPage() {
   };
 
   const handleClear = useCallback(() => {
+    if (!window.confirm('Reset the exchange form? Customer, amounts, and destination will be cleared.')) return;
     setPayCurrency(DEFAULT_PAY_CURRENCY);
     setReceiveCurrency(DEFAULT_RECEIVE_CURRENCY);
     setPayAmount(DEFAULT_PAY);
     setReceiveAmount('');
     setEditDirection('pay');
     setSelectedCustomerId('');
+    setSelectedDestinationId('');
     setErrors({});
     // Persist effect will save cleared state so it stays cleared when navigating back
   }, []);
 
+  // ─── Derived display values ───────────────────────────
+  const selectedCustomer = customerList.find((c) => c.id === selectedCustomerId);
+  const selectedDestination = destinations.find((d) => d.id === selectedDestinationId);
+
+  const destLabel = (d: Destination) =>
+    d.commissionType === 'FIXED' ? `${d.commission} raw` : `${d.commission}%`;
+
+  const filteredCustomers = customerList.filter((c) => {
+    if (!customerSearch) return true;
+    const q = customerSearch.toLowerCase();
+    return c.name.toLowerCase().includes(q) || c.customerId.toLowerCase().includes(q);
+  });
+
   return (
-    <div className="flex gap-6">
-      {/* ═══ Main column ═══════════════════════════════════ */}
-      <div className="flex-1 space-y-6 min-w-0">
-        {/* Page heading */}
-        <div>
-          <h1 className="text-xl font-bold">Dashboard Overview</h1>
-          <p className="text-text-muted text-sm mt-0.5">Ready for transaction processing</p>
+    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_430px] gap-5 items-start">
+      {/* ═══ Currency Exchange ═════════════════════════════ */}
+      <div className="card">
+        <div className="card-header">
+          <h2 className="font-semibold text-[15px]">Currency Exchange</h2>
+          <span className="chip chip-blue">{ref}</span>
         </div>
 
-        {/* ─── Exchange Center Card ─────────────────────── */}
-        <div className="card">
-          <div className="card-header">
-            <div className="flex items-center gap-2.5">
-              <div className="card-icon">
-                <ArrowLeftRight className="w-4 h-4" />
-              </div>
-              <h2 className="font-semibold text-[15px]">Currency Exchange</h2>
-            </div>
-            <span className="text-text-muted text-xs font-mono">{ref}</span>
-          </div>
-
-          <div className="p-5 space-y-5">
-            {/* Customer selector */}
-            <div>
-              <label className="table-header block mb-2">Customer</label>
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCustomerDropdownOpen((v) => !v);
-                    setCustomerSearch('');
-                    setTimeout(() => customerSearchRef.current?.focus(), 0);
-                  }}
-                  className={cn(
-                    'w-full bg-terminal-bg border rounded-lg pl-9 pr-10 py-2.5 text-left outline-none cursor-pointer transition-colors',
-                    errors.customer
-                      ? 'border-status-red focus:border-status-red'
-                      : 'border-terminal-border focus:border-primary',
+        <div className="p-5 space-y-4">
+          {/* ─── Customer ─────────────────────────────── */}
+          <div>
+            <label className="table-header block mb-2">
+              Customer <span className="text-status-red">*</span>
+            </label>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomerDropdownOpen((v) => !v);
+                  setCustomerSearch('');
+                  setTimeout(() => customerSearchRef.current?.focus(), 0);
+                }}
+                className={cn('select-trigger', errors.customer && 'border-status-red')}
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  {selectedCustomer ? (
+                    <>
+                      <Stars level={selectedCustomer.level} />
+                      <span className="text-text-primary font-medium truncate">
+                        {selectedCustomer.name}
+                      </span>
+                      <span className="text-text-muted font-mono text-xs flex-shrink-0">
+                        ({selectedCustomer.customerId})
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-text-muted">Select a customer…</span>
                   )}
-                >
-                  <div className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted">
-                    <User className="w-4 h-4" />
-                  </div>
-                  <span className={selectedCustomerId ? 'text-text-primary' : 'text-text-muted'}>
-                    {selectedCustomerId
-                      ? (() => {
-                          const c = customerList.find((c) => c.id === selectedCustomerId);
-                          return c ? `${c.name} (${c.customerId})` : 'Select a customer...';
-                        })()
-                      : 'Select a customer...'}
-                  </span>
-                  <ChevronDown
-                    className={cn(
-                      'absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted transition-transform',
-                      customerDropdownOpen && 'rotate-180',
-                    )}
-                  />
-                </button>
+                </span>
+                <ChevronDown
+                  className={cn(
+                    'w-4 h-4 text-text-muted transition-transform flex-shrink-0',
+                    customerDropdownOpen && 'rotate-180',
+                  )}
+                />
+              </button>
 
-                {customerDropdownOpen && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-40"
-                      onClick={() => setCustomerDropdownOpen(false)}
-                    />
-                    <div className="absolute top-full mt-1 left-0 right-0 z-50 bg-terminal-card border border-terminal-border rounded-lg shadow-terminal-lg overflow-hidden">
-                      <div className="p-2 border-b border-terminal-border">
-                        <div className="relative">
-                          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted" />
-                          <input
-                            ref={customerSearchRef}
-                            type="text"
-                            value={customerSearch}
-                            onChange={(e) => setCustomerSearch(e.target.value)}
-                            placeholder="Search customers..."
-                            className="w-full bg-terminal-bg border border-terminal-border rounded-md pl-8 pr-3 py-1.5 text-sm text-text-primary outline-none focus:border-primary placeholder:text-text-muted"
-                          />
-                        </div>
-                      </div>
-                      <div className="max-h-56 overflow-y-auto">
-                        {customerList
-                          .filter((c) => {
-                            if (!customerSearch) return true;
-                            const q = customerSearch.toLowerCase();
-                            return (
-                              c.name.toLowerCase().includes(q) ||
-                              c.customerId.toLowerCase().includes(q)
-                            );
-                          })
-                          .map((c) => (
-                            <button
-                              key={c.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedCustomerId(c.id);
-                                setCustomerDropdownOpen(false);
-                                setCustomerSearch('');
-                                if (errors.customer)
-                                  setErrors((er) => ({ ...er, customer: undefined }));
-                              }}
-                              className={cn(
-                                'w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-terminal-surface transition-colors',
-                                c.id === selectedCustomerId && 'bg-primary/10',
-                              )}
-                            >
-                              <User className="w-4 h-4 text-text-muted flex-shrink-0" />
-                              <span className="text-sm text-text-primary font-medium">
-                                {c.name}
-                              </span>
-                              <span className="text-xs text-text-muted ml-auto">
-                                {c.customerId}
-                              </span>
-                            </button>
-                          ))}
-                        {customerList.filter((c) => {
-                          if (!customerSearch) return true;
-                          const q = customerSearch.toLowerCase();
-                          return (
-                            c.name.toLowerCase().includes(q) ||
-                            c.customerId.toLowerCase().includes(q)
-                          );
-                        }).length === 0 && (
-                          <div className="px-4 py-3 text-sm text-text-muted text-center">
-                            No customers found
-                          </div>
-                        )}
+              {customerDropdownOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setCustomerDropdownOpen(false)}
+                  />
+                  <div className="absolute top-full mt-1 left-0 right-0 z-50 bg-terminal-card border border-terminal-border rounded-lg shadow-terminal-lg overflow-hidden">
+                    <div className="p-2 border-b border-terminal-border">
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted" />
+                        <input
+                          ref={customerSearchRef}
+                          type="text"
+                          value={customerSearch}
+                          onChange={(e) => setCustomerSearch(e.target.value)}
+                          placeholder="Search customers..."
+                          className="w-full bg-terminal-bg border border-terminal-border rounded-md pl-8 pr-3 py-1.5 text-sm text-text-primary outline-none focus:border-primary placeholder:text-text-muted"
+                        />
                       </div>
                     </div>
-                  </>
-                )}
+                    <div className="max-h-56 overflow-y-auto">
+                      {filteredCustomers.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedCustomerId(c.id);
+                            setCustomerDropdownOpen(false);
+                            setCustomerSearch('');
+                            if (errors.customer)
+                              setErrors((er) => ({ ...er, customer: undefined }));
+                          }}
+                          className={cn(
+                            'w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-terminal-surface transition-colors',
+                            c.id === selectedCustomerId && 'bg-primary/10',
+                          )}
+                        >
+                          <User className="w-4 h-4 text-text-muted flex-shrink-0" />
+                          <span className="text-sm text-text-primary font-medium truncate">
+                            {c.name}
+                          </span>
+                          <Stars level={c.level} />
+                          <span className="text-xs text-text-muted font-mono ml-auto flex-shrink-0">
+                            {c.customerId}
+                          </span>
+                        </button>
+                      ))}
+                      {filteredCustomers.length === 0 && (
+                        <div className="px-4 py-3 text-sm text-text-muted text-center">
+                          No customers found
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+            {errors.customer && (
+              <p className="text-status-red text-xs mt-1.5 flex items-center gap-1">
+                <AlertCircle className="w-3 h-3" /> {errors.customer}
+              </p>
+            )}
+          </div>
+
+          {/* ─── Pays / Receives ──────────────────────── */}
+          <div className="flex items-start gap-3">
+            {/* Customer pays */}
+            <div className="flex-1 min-w-0">
+              <label className="table-header block mb-2">Customer Pays</label>
+              <div className="field-box" data-invalid={Boolean(errors.amount)}>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={
+                    editDirection === 'pay'
+                      ? payAmount
+                      : conversionResult
+                        ? fmtAmount(conversionResult.computedPay, payCurrency)
+                        : '—'
+                  }
+                  onChange={(e) => handlePayAmountChange(e.target.value)}
+                  onFocus={() => {
+                    if (editDirection === 'receive' && conversionResult) {
+                      setPayAmount(conversionResult.computedPay.toFixed(2));
+                      setEditDirection('pay');
+                    }
+                  }}
+                  aria-label="Amount customer pays"
+                  className={cn(
+                    'field-input',
+                    editDirection === 'pay' ? 'text-text-primary' : 'text-status-green',
+                  )}
+                />
+                <CurrencyDropdown
+                  value={payCurrency}
+                  onChange={(c) => {
+                    setPayCurrency(c);
+                    if (errors.currencies) setErrors((e) => ({ ...e, currencies: undefined }));
+                  }}
+                  open={payDropdownOpen}
+                  setOpen={setPayDropdownOpen}
+                  currencies={currencies}
+                  colorMap={currencyColors}
+                />
               </div>
-              {errors.customer && (
+              {errors.amount && (
                 <p className="text-status-red text-xs mt-1.5 flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" /> {errors.customer}
+                  <AlertCircle className="w-3 h-3" /> {errors.amount}
                 </p>
               )}
             </div>
 
-            {/* Currency conversion row */}
-            <div className="flex items-start gap-3">
-              {/* Customer Pays */}
-              <div className="flex-1 min-w-0">
-                <label className="table-header block mb-2">Customer Pays</label>
-                <div className="flex">
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={
-                      editDirection === 'pay'
-                        ? payAmount
-                        : conversionResult
-                          ? fmtAmount(conversionResult.computedPay, payCurrency)
-                          : '—'
-                    }
-                    onChange={(e) => handlePayAmountChange(e.target.value)}
-                    onFocus={() => {
-                      if (editDirection === 'receive' && conversionResult) {
-                        setPayAmount(conversionResult.computedPay.toFixed(2));
-                        setEditDirection('pay');
-                      }
-                    }}
-                    aria-label="Amount customer pays"
-                    className={cn(
-                      'flex-1 min-w-0 bg-terminal-bg border rounded-l-lg px-4 py-3 text-lg font-mono font-semibold outline-none transition-colors',
-                      editDirection === 'pay' ? 'text-text-primary' : 'text-status-green',
-                      errors.amount
-                        ? 'border-status-red focus:border-status-red'
-                        : 'border-terminal-border focus:border-primary',
-                    )}
-                  />
-                  <CurrencyDropdown
-                    value={payCurrency}
-                    onChange={(c) => {
-                      setPayCurrency(c);
-                      if (errors.currencies) setErrors((e) => ({ ...e, currencies: undefined }));
-                    }}
-                    open={payDropdownOpen}
-                    setOpen={setPayDropdownOpen}
-                    side="right"
-                    currencies={currencies}
-                    colorMap={currencyColors}
-                  />
-                </div>
-                {errors.amount && (
-                  <p className="text-status-red text-xs mt-1.5 flex items-center gap-1">
-                    <AlertCircle className="w-3 h-3" /> {errors.amount}
-                  </p>
-                )}
-              </div>
-
-              {/* Swap button */}
-              <div className="pt-7">
+            {/* Swap */}
+            <div className="flex flex-col flex-shrink-0">
+              <span aria-hidden className="table-header block mb-2 opacity-0 select-none">
+                swap
+              </span>
+              <div className="h-[54px] flex items-center">
                 <button
                   onClick={handleSwap}
                   className="w-10 h-10 rounded-full bg-primary flex items-center justify-center hover:bg-primary-hover transition-colors active:scale-95 shadow-glow-blue"
                   title="Swap currencies"
                 >
-                  <ArrowLeftRight className="w-4.5 h-4.5 text-white" />
+                  <ArrowLeftRight className="w-4 h-4 text-white" />
                 </button>
               </div>
+            </div>
 
-              {/* Customer Receives */}
-              <div className="flex-1 min-w-0">
-                <label className="table-header block mb-2">Customer Receives</label>
-                <div className="flex">
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={
-                      editDirection === 'receive'
-                        ? receiveAmount
-                        : conversionResult
-                          ? fmtAmount(conversionResult.computedReceive, receiveCurrency)
-                          : '—'
+            {/* Customer receives */}
+            <div className="flex-1 min-w-0">
+              <label className="table-header block mb-2">Customer Receives</label>
+              <div className="field-box">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={
+                    editDirection === 'receive'
+                      ? receiveAmount
+                      : conversionResult
+                        ? fmtAmount(conversionResult.computedReceive, receiveCurrency)
+                        : '—'
+                  }
+                  onChange={(e) => handleReceiveAmountChange(e.target.value)}
+                  onFocus={() => {
+                    if (editDirection === 'pay' && conversionResult) {
+                      setReceiveAmount(conversionResult.computedReceive.toFixed(2));
+                      setEditDirection('receive');
                     }
-                    onChange={(e) => handleReceiveAmountChange(e.target.value)}
-                    onFocus={() => {
-                      if (editDirection === 'pay' && conversionResult) {
-                        setReceiveAmount(conversionResult.computedReceive.toFixed(2));
-                        setEditDirection('receive');
-                      }
-                    }}
-                    aria-label="Amount customer receives"
-                    className={cn(
-                      'flex-1 min-w-0 bg-terminal-bg border rounded-l-lg px-4 py-3 text-lg font-mono font-semibold outline-none transition-colors',
-                      editDirection === 'receive' ? 'text-text-primary' : 'text-status-green',
-                      'border-terminal-border focus:border-primary',
-                    )}
-                  />
-                  <CurrencyDropdown
-                    value={receiveCurrency}
-                    onChange={(c) => {
-                      setReceiveCurrency(c);
-                      if (errors.currencies) setErrors((e) => ({ ...e, currencies: undefined }));
-                    }}
-                    open={receiveDropdownOpen}
-                    setOpen={setReceiveDropdownOpen}
-                    side="right"
-                    currencies={currencies}
-                    colorMap={currencyColors}
-                  />
+                  }}
+                  aria-label="Amount customer receives"
+                  className={cn(
+                    'field-input',
+                    editDirection === 'receive' ? 'text-text-primary' : 'text-status-green',
+                  )}
+                />
+                <CurrencyDropdown
+                  value={receiveCurrency}
+                  onChange={(c) => {
+                    setReceiveCurrency(c);
+                    if (errors.currencies) setErrors((e) => ({ ...e, currencies: undefined }));
+                  }}
+                  open={receiveDropdownOpen}
+                  setOpen={setReceiveDropdownOpen}
+                  currencies={currencies}
+                  colorMap={currencyColors}
+                />
+              </div>
+              {errors.currencies && (
+                <p className="text-status-red text-xs mt-1.5 flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3" /> {errors.currencies}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* ─── Destination ──────────────────────────── */}
+          {destinations.length > 0 && (
+            <div className="relative">
+              <label className="table-header block mb-2">
+                Destination{' '}
+                <span className="normal-case tracking-normal text-text-muted">(optional)</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => setDestDropdownOpen(!destDropdownOpen)}
+                className="select-trigger"
+              >
+                <span
+                  className={cn(
+                    'truncate',
+                    selectedDestination ? 'text-text-primary font-medium' : 'text-text-muted',
+                  )}
+                >
+                  {selectedDestination
+                    ? `${selectedDestination.name} — ${destLabel(selectedDestination)}`
+                    : 'No destination — direct payout'}
+                </span>
+                <ChevronDown
+                  className={cn(
+                    'w-4 h-4 text-text-muted transition-transform flex-shrink-0',
+                    destDropdownOpen && 'rotate-180',
+                  )}
+                />
+              </button>
+              {destDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setDestDropdownOpen(false)} />
+                  <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-terminal-card border border-terminal-border rounded-lg shadow-terminal-lg max-h-56 overflow-y-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedDestinationId('');
+                        setDestDropdownOpen(false);
+                      }}
+                      className={cn(
+                        'w-full text-left px-4 py-2.5 text-sm hover:bg-terminal-surface transition-colors',
+                        !selectedDestinationId
+                          ? 'bg-primary/10 text-primary font-semibold'
+                          : 'text-text-muted',
+                      )}
+                    >
+                      No destination — direct payout
+                    </button>
+                    {destinations.map((d) => (
+                      <button
+                        key={d.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedDestinationId(d.id);
+                          setDestDropdownOpen(false);
+                        }}
+                        className={cn(
+                          'w-full text-left px-4 py-2.5 text-sm hover:bg-terminal-surface transition-colors flex items-center justify-between gap-3',
+                          selectedDestinationId === d.id
+                            ? 'bg-primary/10 text-primary font-semibold'
+                            : 'text-text-primary',
+                        )}
+                      >
+                        <span className="truncate">{d.name}</span>
+                        <span className="text-text-muted text-xs font-mono flex-shrink-0">
+                          {destLabel(d)}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ─── Quote panel ──────────────────────────── */}
+          <div className="quote-panel">
+            <div className="px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <span className="table-header">Market rate (mid)</span>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {conversionResult && (conversionResult.feePoints > 0 || conversionResult.feePercent > 0) && (
+                    <span className="chip chip-amber">
+                      Fee:
+                      {conversionResult.feePercent > 0 && ` ${conversionResult.feePercent}%`}
+                      {conversionResult.feePoints > 0 && ` − ${conversionResult.feePoints}pt`}
+                    </span>
+                  )}
                 </div>
-                {errors.currencies && (
-                  <p className="text-status-red text-xs mt-1.5 flex items-center gap-1">
-                    <AlertCircle className="w-3 h-3" /> {errors.currencies}
-                  </p>
+              </div>
+              <div className="mt-1.5 font-mono text-[12.5px] text-text-secondary tabular-nums">
+                {conversionResult ? (
+                  <>
+                    1 {payCurrency} = {fmtRate(conversionResult.midRate, receiveCurrency)}{' '}
+                    {receiveCurrency}
+                    <span className="inline-block mx-2 w-px h-3 bg-terminal-border align-middle" />1{' '}
+                    {receiveCurrency} = {fmtRate(1 / conversionResult.midRate, payCurrency)}{' '}
+                    {payCurrency}
+                  </>
+                ) : (
+                  '—'
                 )}
               </div>
             </div>
 
-            {/* Rate & spread display */}
-            <div className="flex flex-col gap-1.5 px-1 text-sm">
-              {/* Market rate (mid) */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Activity className="w-3.5 h-3.5 text-text-muted" />
-                  <span className="text-text-muted text-xs font-semibold">Market rate</span>
-                  <span className="text-text-muted font-mono text-[12px]">
-                    {conversionResult
-                      ? <>1 {payCurrency} = {fmtRate(conversionResult.midRate, receiveCurrency)} {receiveCurrency} <span className="inline-block mx-1.5 w-px h-3 bg-terminal-border align-middle" /> 1 {receiveCurrency} = {fmtRate(1 / conversionResult.midRate, payCurrency)} {payCurrency}</>
-                      : '—'}
-                  </span>
-                </div>
-                <span className="text-text-muted text-xs font-mono">
-                  Spread: {(() => {
-                    const quote = receiveCurrency !== baseCurrency ? receiveCurrency : payCurrency;
-                    const cfg = pricingMap.get(quote);
-                    if (!cfg) return '—';
-                    if (cfg.spreadType === 'FIXED') {
-                      if (cfg.spreadMode === 'ASYMMETRIC') {
-                        if (cfg.buyMargin === 0 && cfg.sellMargin === 0) return '—';
-                        return `B:${cfg.buyMargin} / S:${cfg.sellMargin} fix`;
-                      }
-                      if (cfg.spreadFixed === 0) return '—';
-                      return `${cfg.spreadFixed} fix`;
-                    }
-                    if (cfg.spreadMode === 'ASYMMETRIC') {
-                      if (cfg.buyMargin === 0 && cfg.sellMargin === 0) return '—';
-                      return `B:${cfg.buyMargin}% / S:${cfg.sellMargin}%`;
-                    }
-                    if (cfg.spreadPercent === 0) return '—';
-                    return `${cfg.spreadPercent}%`;
-                  })()}
-                </span>
-              </div>
-              {/* Customer rate (bid) */}
-              <div className="flex items-center gap-2">
-                <Activity className="w-3.5 h-3.5 text-status-green" />
-                <span className="text-text-primary text-xs font-semibold">Customer rate (bid)</span>
-                <span className="text-text-primary font-mono font-medium text-[12px]">
-                  {conversionResult
-                    ? <>1 {payCurrency} = {fmtRate(conversionResult.bidRate, receiveCurrency)} {receiveCurrency} <span className="inline-block mx-1.5 w-px h-3 bg-terminal-border align-middle" /> 1 {receiveCurrency} = {fmtRate(1 / conversionResult.bidRate, payCurrency)} {payCurrency}</>
-                    : '—'}
-                </span>
-              </div>
-              {/* Customer rate (ask) */}
-              <div className="flex items-center gap-2">
-                <Activity className="w-3.5 h-3.5 text-amber-500" />
-                <span className="text-text-primary text-xs font-semibold">Customer rate (ask)</span>
-                <span className="text-text-primary font-mono font-medium text-[12px]">
-                  {conversionResult
-                    ? <>1 {payCurrency} = {fmtRate(conversionResult.askRate, receiveCurrency)} {receiveCurrency} <span className="inline-block mx-1.5 w-px h-3 bg-terminal-border align-middle" /> 1 {receiveCurrency} = {fmtRate(1 / conversionResult.askRate, payCurrency)} {payCurrency}</>
-                    : '—'}
-                </span>
-              </div>
+            <div className="quote-row">
+              <span className="table-header">Customer rate</span>
+              <span className="font-mono text-[15px] font-semibold text-status-green tabular-nums">
+                {conversionResult
+                  ? `${fmtRate(conversionResult.feeRate, receiveCurrency)} ${receiveCurrency}`
+                  : '—'}
+              </span>
             </div>
+
+            {/* TEMP: full equation breakdown — remove when done debugging */}
+            {conversionResult?.equation && (
+              <div className="px-4 py-3 border-t border-dashed border-amber-500/40 bg-amber-500/5">
+                <div className="table-header text-amber-500 mb-1.5">Equation</div>
+                <div className="font-mono text-[12px] text-text-secondary tabular-nums leading-relaxed">
+                  {conversionResult.equation.terms
+                    .map((t, i) => {
+                      const v = parseFloat(t.value.toFixed(6));
+                      const sign = i === 0 ? '' : v < 0 ? ' − ' : ' + ';
+                      return `${sign}${Math.abs(v)} (${t.label})`;
+                    })
+                    .join('')}
+                  {' = '}
+                  <span className="text-status-green font-semibold">
+                    {parseFloat(conversionResult.equation.result.toFixed(6))}
+                  </span>{' '}
+                  {conversionResult.equation.unit}
+                </div>
+                {/* Amount step: rate applied to what the customer pays */}
+                <div className="font-mono text-[12px] text-text-secondary tabular-nums leading-relaxed mt-1">
+                  {parseFloat(conversionResult.computedPay.toFixed(2))} {payCurrency}
+                  {conversionResult.equation.perPay ? ' × ' : ' ÷ '}
+                  {parseFloat(conversionResult.equation.result.toFixed(6))}
+                  {' = '}
+                  <span className="text-status-green font-semibold">
+                    {parseFloat(conversionResult.computedReceive.toFixed(2))}
+                  </span>{' '}
+                  {receiveCurrency}
+                  {conversionResult.destCommission > 0 && ' (incl. destination fee)'}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* ─── Clear & Process Transaction Buttons ───────── */}
-        <div className="flex gap-3">
+        {/* ─── Actions ────────────────────────────────── */}
+        <div className="card-footer">
           <button
             type="button"
             onClick={handleClear}
-            className="flex-1 py-3.5 text-[15px] font-semibold flex items-center justify-center gap-2 rounded-terminal border border-terminal-border bg-terminal-surface text-text-secondary hover:bg-terminal-surface-2 hover:border-terminal-border/80 transition-all duration-150"
+            className="btn-outline text-sm font-semibold flex items-center gap-2"
           >
-            <Eraser className="w-5 h-5" />
-            Clear
+            <Eraser className="w-4 h-4" />
+            Reset
           </button>
           <button
             onClick={handleProcess}
             disabled={submitted}
             className={cn(
-              'flex-1 py-3.5 text-[15px] font-semibold flex items-center justify-center gap-2 rounded-terminal transition-all duration-150',
+              'text-sm font-semibold flex items-center gap-2 px-5 py-2.5 rounded-lg transition-all duration-150',
               submitted ? 'bg-status-green text-white cursor-default' : 'btn-primary',
             )}
           >
-            <CheckCircle2 className="w-5 h-5" />
+            <CheckCircle2 className="w-4 h-4" />
             {submitted ? 'Transaction Submitted!' : 'Process Transaction'}
           </button>
         </div>
       </div>
+
+      {/* ═══ Live Exchange Rates ═══════════════════════════ */}
+      {pricing.length > 0 && (
+        <div className="card overflow-hidden">
+          <div className="card-header">
+            <h2 className="font-semibold text-[15px]">Live Exchange Rates</h2>
+            <span className="flex items-center gap-1.5 text-xxs font-semibold uppercase tracking-wider text-status-green">
+              <span className="w-1.5 h-1.5 rounded-full bg-status-green animate-pulse" />
+              Live
+            </span>
+          </div>
+
+          {/* Column headers */}
+          <div className="flex items-center justify-between gap-3 px-5 py-2 border-b border-terminal-border bg-terminal-surface">
+            <span className="table-header">Pair</span>
+            <span className="table-header w-[110px] text-right">Rate</span>
+          </div>
+
+          <div className="divide-y divide-terminal-border max-h-[calc(100vh-220px)] overflow-y-auto">
+            {pricing.map((row) => (
+              <div
+                key={row.pair}
+                className="flex items-center justify-between gap-3 px-5 py-2.5 hover:bg-terminal-surface transition-colors"
+              >
+                <div className="min-w-0">
+                  <div className="font-semibold text-text-primary text-[13px]">{row.pair}</div>
+                  <div className="text-xxs text-text-muted mt-0.5 truncate">{row.quoteName}</div>
+                </div>
+                <span className="w-[110px] text-right font-mono text-[12px] tabular-nums text-status-green flex-shrink-0">
+                  {formatRate(row.mid)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -724,7 +959,6 @@ function CurrencyDropdown({
   onChange,
   open,
   setOpen,
-  side,
   currencies,
   colorMap,
 }: {
@@ -732,29 +966,25 @@ function CurrencyDropdown({
   onChange: (code: string) => void;
   open: boolean;
   setOpen: (v: boolean) => void;
-  side: 'left' | 'right';
   currencies: Currency[];
   colorMap: Record<string, string>;
 }) {
   return (
-    <div className="relative">
+    <div className="relative flex-shrink-0 pr-2">
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className={cn(
-          'h-full bg-terminal-surface border border-l-0 border-terminal-border px-4 py-3 flex items-center gap-2 text-text-secondary hover:bg-terminal-surface-2 transition-colors',
-          side === 'right' ? 'rounded-r-lg' : 'rounded-l-lg',
-        )}
+        className="bg-terminal-surface-2 border border-terminal-border rounded-md pl-1.5 pr-2 py-1.5 flex items-center gap-1.5 hover:bg-terminal-surface transition-colors"
       >
         <span
           className={cn(
-            'w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold',
+            'w-5 h-5 rounded-full flex items-center justify-center text-white text-[9px] font-bold',
             colorMap[value] ?? 'bg-gray-600',
           )}
         >
           {value.slice(0, 2)}
         </span>
-        <span className="font-semibold text-text-primary text-sm">{value}</span>
+        <span className="font-semibold text-text-primary text-[13px]">{value}</span>
         <ChevronDown
           className={cn('w-3.5 h-3.5 text-text-muted transition-transform', open && 'rotate-180')}
         />

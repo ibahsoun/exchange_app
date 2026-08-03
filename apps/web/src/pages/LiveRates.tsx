@@ -5,13 +5,15 @@ import {
   Radio,
   GitCompareArrows,
   RefreshCw,
+  RotateCcw,
   Search,
   ChevronDown,
   Info,
   Clock,
+  Check,
 } from 'lucide-react';
 import { cn, formatRate } from '@/lib/utils';
-import { multiSourceApi, spreadApi, VALID_BASES, type MultiSourceBoardResponse, type BoardRow, type SourceStatus, type SpreadType, type SpreadMode, type FixedUnit } from '@/lib/api';
+import { multiSourceApi, spreadApi, VALID_BASES, FEE_POINT_VALUE, type MultiSourceBoardResponse, type BoardRow, type SourceStatus } from '@/lib/api';
 
 // ─── Cache key ───────────────────────────────────────────────
 const CACHE_KEY = 'live-rates-board';
@@ -60,7 +62,14 @@ function timeAgo(ts: string): string {
   return `${Math.floor(diff / 3600)}h ago`;
 }
 
-const DEFAULT_SOURCE = 'currencyfreaks';
+/**
+ * The app runs on a single live-rate source, so the primary source is simply the
+ * first one the board reports. Derived rather than hardcoded so changing the
+ * provider (LIVE_MARKET_SOURCE_KEY) needs no frontend change.
+ */
+function primarySourceKey(sources: SourceStatus[]): string {
+  return sources[0]?.key ?? '';
+}
 
 // ─── Shimmer overlay ────────────────────────────────────────
 
@@ -107,50 +116,69 @@ const ComparisonRow = memo(function ComparisonRow({
   sources,
   prevMid,
   onModeChange,
-  onSpreadChange,
+  onConfigChange,
 }: {
   row: BoardRow;
   sources: SourceStatus[];
   prevMid?: number;
   onModeChange: (quote: string, mode: string, mid?: number, sourceHint?: string) => void;
-  onSpreadChange: (quote: string, spreadType: SpreadType, spreadMode: SpreadMode, fixedUnit: FixedUnit, values: { spreadPercent?: number; spreadFixed?: number; buyMargin?: number; sellMargin?: number }) => void;
+  onConfigChange: (quote: string, spreadFixed: number, roundingDecimals: number | null) => void;
 }) {
   const rowRef = useRef<HTMLTableRowElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [modeOpen, setModeOpen] = useState(false);
   const [customValue, setCustomValue] = useState('');
-  const [editSpreadType, setEditSpreadType] = useState<SpreadType | null>(null);
-  const [editSpreadMode, setEditSpreadMode] = useState<SpreadMode | null>(null);
-  const [editPercent, setEditPercent] = useState<string | null>(null);
-  const [editFixed, setEditFixed] = useState<string | null>(null);
-  const [editBuy, setEditBuy] = useState<string | null>(null);
-  const [editSell, setEditSell] = useState<string | null>(null);
-  const [spreadDirty, setSpreadDirty] = useState(false);
+  const [editRate, setEditRate] = useState<string | null>(null);
+  const [editSpread, setEditSpread] = useState<string | null>(null);
+  const [editRoundingDecimals, setEditRoundingDecimals] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
 
-  // Derive display values: use edit state when dirty, otherwise always use props
-  const localSpreadType = spreadDirty && editSpreadType != null ? editSpreadType : (row.storeRate.spreadType || 'PERCENTAGE');
-  const localSpreadMode = spreadDirty && editSpreadMode != null ? editSpreadMode : (row.storeRate.spreadMode || 'SYMMETRIC');
-  const localFixedUnit: FixedUnit = row.storeRate.fixedUnit || 'RAW';
-  const localPercent = spreadDirty && editPercent != null ? editPercent : (row.storeRate.spreadPercent ? String(row.storeRate.spreadPercent) : '');
-  const localFixed = spreadDirty && editFixed != null ? editFixed : (row.storeRate.spreadFixed ? String(row.storeRate.spreadFixed) : '');
-  const localBuy = spreadDirty && editBuy != null ? editBuy : (row.storeRate.buyMargin ? String(row.storeRate.buyMargin) : '');
-  const localSell = spreadDirty && editSell != null ? editSell : (row.storeRate.sellMargin ? String(row.storeRate.sellMargin) : '');
+  // A pair with live source data follows the feed; every other pair is manual.
+  const hasFeed = Object.values(row.sourceRates).some((c) => c.status === 'ok' && c.mid > 0);
 
-  const saveSpread = () => {
-    onSpreadChange(row.quote, localSpreadType, localSpreadMode, localFixedUnit, {
-      spreadPercent: parseFloat(localPercent) || 0,
-      spreadFixed: parseFloat(localFixed) || 0,
-      buyMargin: parseFloat(localBuy) || 0,
-      sellMargin: parseFloat(localSell) || 0,
-    });
-    // Reset edit state — values will now derive from refreshed props
-    setSpreadDirty(false);
-    setEditSpreadType(null);
-    setEditSpreadMode(null);
-    setEditPercent(null);
-    setEditFixed(null);
-    setEditBuy(null);
-    setEditSell(null);
+  const localRate =
+    editRate != null
+      ? editRate
+      : row.storeRate.mid > 0
+        ? String(parseFloat(row.storeRate.mid.toFixed(6)))
+        : '';
+  // Spread is entered in points; 1pt = 0.01 on the rate.
+  const localSpread =
+    editSpread != null
+      ? editSpread
+      : row.storeRate.spreadFixed
+        ? String(parseFloat((row.storeRate.spreadFixed / FEE_POINT_VALUE).toFixed(4)))
+        : '';
+  const localRoundingDecimals =
+    editRoundingDecimals != null
+      ? editRoundingDecimals
+      : row.storeRate.roundingDecimals != null
+        ? String(row.storeRate.roundingDecimals)
+        : '';
+  const dirty = editRate != null || editSpread != null || editRoundingDecimals != null;
+  /** Configured, but too coarse for this rate — the backend quotes full precision instead */
+  const roundingIgnored =
+    editRoundingDecimals == null &&
+    row.storeRate.roundingDecimals != null &&
+    row.storeRate.effectiveRoundingDecimals == null;
+
+  const save = () => {
+    if (editRate != null) {
+      const val = parseFloat(editRate);
+      if (!isNaN(val) && val > 0) onModeChange(row.quote, 'CUSTOM_VALUE', val);
+    }
+    if (editSpread != null || editRoundingDecimals != null) {
+      onConfigChange(
+        row.quote,
+        (parseFloat(localSpread) || 0) * FEE_POINT_VALUE,
+        localRoundingDecimals !== '' ? parseInt(localRoundingDecimals, 10) : null,
+      );
+    }
+    setEditRate(null);
+    setEditSpread(null);
+    setEditRoundingDecimals(null);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
   };
 
   // Flash on mid change
@@ -174,10 +202,12 @@ const ComparisonRow = memo(function ComparisonRow({
     return () => document.removeEventListener('mousedown', handleClick);
   }, [modeOpen]);
 
+  const sourceKey = primarySourceKey(sources);
+
   const handleUseSource = () => {
-    const cell = row.sourceRates[DEFAULT_SOURCE];
+    const cell = row.sourceRates[sourceKey];
     if (cell && cell.status === 'ok') {
-      onModeChange(row.quote, 'MANUAL_SOURCE', cell.mid, DEFAULT_SOURCE);
+      onModeChange(row.quote, 'MANUAL_SOURCE', cell.mid, sourceKey);
     }
     setModeOpen(false);
   };
@@ -223,17 +253,24 @@ const ComparisonRow = memo(function ComparisonRow({
             >
               {formatRate(cell.mid)}
             </span>
-            {cell.buy != null && (
-              <div className="text-xxs text-text-muted mt-0.5">
-                {formatRate(cell.buy)} / {formatRate(cell.sell ?? 0)}
-              </div>
-            )}
           </td>
         );
       })}
 
-      {/* Store Rate + Mode dropdown */}
+      {/* Store Rate: feed pairs follow the source, manual pairs are typed in */}
       <td className="px-3 py-3">
+        {!hasFeed ? (
+          <input
+            type="number"
+            step="any"
+            min="0"
+            placeholder="Set rate..."
+            value={localRate}
+            onChange={(e) => setEditRate(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+            className="w-28 bg-terminal-surface-2 border border-terminal-border rounded px-2 py-1.5 text-[13px] font-mono font-bold text-text-primary outline-none focus:border-primary"
+          />
+        ) : (
         <div className="flex items-center gap-2">
           <span className="font-mono font-bold text-[13px] text-text-primary">
             {formatRate(row.storeRate.mid)}
@@ -248,7 +285,7 @@ const ComparisonRow = memo(function ComparisonRow({
                   : 'border-status-blue/30 text-status-blue bg-status-blue-subtle',
               )}
             >
-              {row.storeRate.mode === 'CUSTOM_VALUE' ? 'Custom' : `Source (${row.storeRate.sourceHint ?? DEFAULT_SOURCE})`}
+              {row.storeRate.mode === 'CUSTOM_VALUE' ? 'Custom' : `Source (${row.storeRate.sourceHint ?? sourceKey})`}
               <ChevronDown className={cn('w-3 h-3 transition-transform', modeOpen && 'rotate-180')} />
             </button>
 
@@ -267,7 +304,7 @@ const ComparisonRow = memo(function ComparisonRow({
                   <div className="flex items-center justify-between">
                     <span>Use Source Rate</span>
                     <span className="font-mono text-text-muted">
-                      {formatRate(row.sourceRates[DEFAULT_SOURCE]?.mid ?? 0)}
+                      {formatRate(row.sourceRates[sourceKey]?.mid ?? 0)}
                     </span>
                   </div>
                 </button>
@@ -297,80 +334,70 @@ const ComparisonRow = memo(function ComparisonRow({
             )}
           </div>
         </div>
+        )}
       </td>
 
-      {/* Spread controls */}
-      <td className="px-4 py-3">
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <select
-            value={`${localSpreadType}_${localSpreadMode}`}
-            onChange={(e) => {
-              const [t, m] = e.target.value.split('_') as [SpreadType, SpreadMode];
-              setEditSpreadType(t);
-              setEditSpreadMode(m);
-              setSpreadDirty(true);
-            }}
-            className="appearance-none bg-terminal-surface-2 border border-terminal-border rounded px-1.5 py-1 text-xxs font-semibold text-text-primary outline-none focus:border-primary cursor-pointer"
-          >
-            <option value="PERCENTAGE_SYMMETRIC">% Sym</option>
-            <option value="PERCENTAGE_ASYMMETRIC">% Asym</option>
-            <option value="FIXED_SYMMETRIC">Fix Sym</option>
-            <option value="FIXED_ASYMMETRIC">Fix Asym</option>
-          </select>
-          {localSpreadMode === 'SYMMETRIC' ? (
-            <input
-              type="number"
-              step="any"
-              min="0"
-              placeholder="0"
-              value={localSpreadType === 'PERCENTAGE' ? localPercent : localFixed}
-              onChange={(e) => {
-                if (localSpreadType === 'PERCENTAGE') setEditPercent(e.target.value);
-                else setEditFixed(e.target.value);
-                setSpreadDirty(true);
-              }}
-              onKeyDown={(e) => { if (e.key === 'Enter') saveSpread(); }}
-              className="w-16 bg-terminal-surface-2 border border-terminal-border rounded px-2 py-1 text-[12px] font-mono text-text-primary outline-none focus:border-primary"
-            />
-          ) : (
-            <>
-              <input
-                type="number"
-                step="any"
-                min="0"
-                placeholder="B"
-                title="Buy margin"
-                value={localBuy}
-                onChange={(e) => { setEditBuy(e.target.value); setSpreadDirty(true); }}
-                onKeyDown={(e) => { if (e.key === 'Enter') saveSpread(); }}
-                className="w-14 bg-terminal-surface-2 border border-terminal-border rounded px-1.5 py-1 text-[12px] font-mono text-text-primary outline-none focus:border-primary"
-              />
-              <input
-                type="number"
-                step="any"
-                min="0"
-                placeholder="S"
-                title="Sell margin"
-                value={localSell}
-                onChange={(e) => { setEditSell(e.target.value); setSpreadDirty(true); }}
-                onKeyDown={(e) => { if (e.key === 'Enter') saveSpread(); }}
-                className="w-14 bg-terminal-surface-2 border border-terminal-border rounded px-1.5 py-1 text-[12px] font-mono text-text-primary outline-none focus:border-primary"
-              />
-            </>
-          )}
-          {spreadDirty && (
-            <button
-              onClick={saveSpread}
-              className="px-2 py-1 bg-primary text-white text-xxs rounded font-semibold hover:bg-primary-hover transition-colors"
-            >
-              Save
-            </button>
+      {/* Spread in points (1pt = 0.01), a discount back to the customer */}
+      <td className="px-3 py-3">
+        <div className="flex items-center gap-1.5">
+          <input
+            type="number"
+            step="any"
+            min="0"
+            placeholder="0"
+            value={localSpread}
+            onChange={(e) => setEditSpread(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+            className="w-16 bg-terminal-surface-2 border border-terminal-border rounded px-2 py-1 text-[12px] font-mono text-text-primary outline-none focus:border-primary"
+          />
+          <span className="text-xxs text-text-muted">pts</span>
+        </div>
+      </td>
+
+      {/* Rounding */}
+      <td className="px-3 py-3">
+        <div className="flex items-center gap-1.5">
+          <input
+            type="number"
+            min="0"
+            max="8"
+            step="1"
+            placeholder="—"
+            value={localRoundingDecimals}
+            onChange={(e) => setEditRoundingDecimals(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+            title={roundingIgnored ? 'Too coarse for this rate — quoting at full precision instead' : undefined}
+            className={`w-12 bg-terminal-surface-2 border rounded px-2 py-1 text-xs font-mono text-right outline-none focus:border-primary ${
+              roundingIgnored
+                ? 'border-status-yellow text-status-yellow'
+                : 'border-terminal-border text-text-primary'
+            }`}
+          />
+          {localRoundingDecimals !== '' && (
+            <span className="text-xxs text-text-muted whitespace-nowrap">dp</span>
           )}
         </div>
-        {(row.storeRate.spread > 0 || row.storeRate.buyMargin > 0 || row.storeRate.sellMargin > 0 || row.storeRate.spreadPercent > 0 || row.storeRate.spreadFixed > 0) && (
-          <div className="text-xs text-text-muted mt-1.5 font-mono">
-            B: {formatRate(row.storeRate.bid)} / A: {formatRate(row.storeRate.ask)}
-          </div>
+      </td>
+
+      {/* Action */}
+      <td className="px-3 py-3 text-center">
+        {saved ? (
+          <span className="inline-flex items-center gap-1 text-status-green text-xxs font-semibold">
+            <Check className="w-3 h-3" /> Saved
+          </span>
+        ) : (
+          <button
+            onClick={save}
+            disabled={!dirty}
+            className={cn(
+              'px-3 py-1 text-xs rounded font-semibold transition-colors',
+              dirty
+                ? 'bg-primary text-white hover:bg-primary-hover'
+                : 'bg-terminal-surface text-text-muted cursor-not-allowed',
+            )}
+          >
+            Save
+          </button>
         )}
       </td>
 
@@ -389,9 +416,6 @@ const ComparisonRow = memo(function ComparisonRow({
             minute: '2-digit',
           })}
         </div>
-        {row.storeRate.mode === 'CUSTOM_VALUE' && (
-          <span className="inline-block mt-1 text-xxs font-semibold text-accent-purple">Custom</span>
-        )}
       </td>
     </tr>
   );
@@ -404,11 +428,14 @@ export function LiveRatesPage() {
   const [board, setBoard] = useState<MultiSourceBoardResponse | null>(cached);
   const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState<string | null>(null);
+  /** Rejected save (e.g. rounding too coarse for the rate) — shown above the table */
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [search, setSearch] = useState('');
   const [autoSync, setAutoSync] = useState(false);
   const [baseCurrency, setBaseCurrency] = useState(getStoredBase);
+  const [bases, setBases] = useState<string[]>(VALID_BASES);
   const prevMidsRef = useRef<Map<string, number>>(new Map());
   const intervalRef = useRef<ReturnType<typeof setInterval>>();
   const defaultsAppliedRef = useRef(false);
@@ -417,6 +444,23 @@ export function LiveRatesPage() {
     setBaseCurrency(newBase);
     storeBase(newBase);
   };
+
+  // Base currencies come from Settings; a stored base that has since been removed
+  // would be rejected by the API, so fall back to USD.
+  useEffect(() => {
+    multiSourceApi
+      .getBases()
+      .then((list) => {
+        if (list.length === 0) return;
+        setBases(list);
+        setBaseCurrency((current) => {
+          if (list.includes(current)) return current;
+          storeBase('USD');
+          return 'USD';
+        });
+      })
+      .catch(() => { /* keep the fallback list */ });
+  }, []);
 
   const fetchBoard = useCallback(async () => {
     try {
@@ -443,19 +487,20 @@ export function LiveRatesPage() {
     }
   }, [fetchBoard]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Once board loads, set CurrencyFreaks as default source for pairs still on AUTO_AVG.
+  // Once board loads, point pairs still on AUTO_AVG at the live source.
   // Only run with USD base to avoid writing converted mids to the USD-based store.
   useEffect(() => {
     if (!board || defaultsAppliedRef.current || baseCurrency !== 'USD') return;
     defaultsAppliedRef.current = true;
 
-    const cfSource = board.sources.find((s) => s.key === DEFAULT_SOURCE);
-    if (!cfSource || cfSource.status !== 'online') return;
+    const sourceKey = primarySourceKey(board.sources);
+    const liveSource = board.sources.find((s) => s.key === sourceKey);
+    if (!liveSource || liveSource.status !== 'online') return;
 
     const pairsToUpdate = board.rows.filter(
       (r) =>
         r.storeRate.mode === 'AUTO_AVG' &&
-        r.sourceRates[DEFAULT_SOURCE]?.status === 'ok',
+        r.sourceRates[sourceKey]?.status === 'ok',
     );
 
     if (pairsToUpdate.length > 0) {
@@ -466,8 +511,8 @@ export function LiveRatesPage() {
             base: r.base,
             quote: r.quote,
             mode: 'MANUAL_SOURCE',
-            mid: r.sourceRates[DEFAULT_SOURCE]!.mid,
-            sourceHint: DEFAULT_SOURCE,
+            mid: r.sourceRates[sourceKey]!.mid,
+            sourceHint: sourceKey,
           }),
         ),
       )
@@ -515,6 +560,21 @@ export function LiveRatesPage() {
     }
   };
 
+  const handleReset = async () => {
+    if (!window.confirm('Reset all pairs? USD/BRL goes back to following the feed and rounding is cleared; manual rates are kept.')) return;
+    setRefreshing(true);
+    try {
+      await multiSourceApi.reset();
+      const data = await multiSourceApi.refresh(baseCurrency);
+      setBoard(data);
+      writeCache(data);
+    } catch (err) {
+      console.error('Failed to reset rates:', err);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
   /** Map a display-layer quote/mid back to the original USD pair for writes */
   const toUsdPair = useCallback(
     (displayQuote: string, displayMid?: number) => {
@@ -537,20 +597,29 @@ export function LiveRatesPage() {
     [baseCurrency, board],
   );
 
-  const handleSpreadChange = async (
+  const handleConfigChange = async (
     quote: string,
-    spreadType: SpreadType,
-    spreadMode: SpreadMode,
-    fixedUnit: FixedUnit,
-    values: { spreadPercent?: number; spreadFixed?: number; buyMargin?: number; sellMargin?: number },
+    spreadFixed: number,
+    roundingDecimals: number | null,
   ) => {
     const usd = toUsdPair(quote);
     setUpdating(true);
+    setSaveError(null);
     try {
-      await spreadApi.update({ base: 'USD', quote: usd.quote, spreadType, spreadMode, fixedUnit, ...values });
+      await spreadApi.update({
+        base: 'USD',
+        quote: usd.quote,
+        spreadType: 'FIXED',
+        spreadMode: 'SYMMETRIC',
+        fixedUnit: 'RAW',
+        spreadFixed,
+        roundingDecimals,
+        roundingMode: null,
+      });
       await fetchBoard();
     } catch (err) {
       console.error('Failed to update spread:', err);
+      setSaveError(err instanceof Error ? err.message : 'Failed to save spread');
     } finally {
       setUpdating(false);
     }
@@ -661,7 +730,7 @@ export function LiveRatesPage() {
               onChange={(e) => handleBaseChange(e.target.value)}
               className="appearance-none bg-transparent text-[13px] text-text-primary font-semibold outline-none cursor-pointer pr-1"
             >
-              {VALID_BASES.map((b) => (
+              {bases.map((b) => (
                 <option key={b} value={b}>{b}</option>
               ))}
             </select>
@@ -705,6 +774,16 @@ export function LiveRatesPage() {
           >
             <RefreshCw className={cn('w-3.5 h-3.5', isBusy && 'animate-spin')} />
             {refreshing ? 'Syncing...' : 'Refresh'}
+          </button>
+
+          {/* Reset button */}
+          <button
+            onClick={handleReset}
+            disabled={isBusy}
+            className="btn-outline text-xs py-1.5 px-3 flex items-center gap-1.5"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Reset
           </button>
         </div>
       </div>
@@ -793,6 +872,12 @@ export function LiveRatesPage() {
           </div>
         </div>
 
+        {saveError && (
+          <div className="mx-4 mt-3 rounded border border-status-red/40 bg-status-red/10 px-3 py-2 text-xs text-status-red">
+            {saveError}
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
@@ -812,11 +897,13 @@ export function LiveRatesPage() {
                   </th>
                 ))}
                 <th className="table-header text-left px-3 py-3 min-w-[180px]">Store Rate</th>
-                <th className="table-header text-left px-3 py-3 min-w-[240px]">Spread</th>
-                <th className="table-header text-left px-3 py-3 min-w-[130px]">
+                <th className="table-header text-left px-3 py-3 min-w-[100px]">Spread</th>
+                <th className="table-header text-left px-3 py-3 min-w-[130px]">Rounding</th>
+                <th className="table-header text-center px-3 py-3 w-20">Action</th>
+                <th className="table-header text-left px-3 py-3 min-w-[100px]">
                   <div className="flex items-center gap-1.5">
                     <Clock className="w-3 h-3" />
-                    <span>Last Updated</span>
+                    <span>Updated</span>
                   </div>
                 </th>
               </tr>
@@ -829,13 +916,13 @@ export function LiveRatesPage() {
                   sources={sources}
                   prevMid={prevMidsRef.current.get(row.quote)}
                   onModeChange={handleModeChange}
-                  onSpreadChange={handleSpreadChange}
+                  onConfigChange={handleConfigChange}
                 />
               ))}
               {filteredRows.length === 0 && (
                 <tr>
                   <td
-                    colSpan={sources.length + 4}
+                    colSpan={sources.length + 6}
                     className="px-5 py-10 text-center text-text-muted text-sm"
                   >
                     {search ? `No pairs matching "${search}"` : 'No data available'}
@@ -850,9 +937,11 @@ export function LiveRatesPage() {
         <div className="px-5 py-3 border-t border-terminal-border flex items-center gap-2 text-xs text-text-muted">
           <Info className="w-4 h-4 text-primary flex-shrink-0" />
           <span>
-            Rates are fetched from {sources.length} external source{sources.length !== 1 ? 's' : ''}.
-            Use the <strong className="text-text-primary">Store Rate</strong> dropdown to override pricing per pair.
-            {' '}<strong className="text-text-primary">Percentage</strong>: offset by % of mid. <strong className="text-text-primary">Fixed</strong>: offset by fixed amount. <strong className="text-text-primary">Asymmetric</strong>: separate buy/sell margins. Customer receives the Bid rate when selling {baseCurrency}.
+            Each pair has a single store rate. <strong className="text-text-primary">USD/BRL</strong> follows
+            the live feed; every other pair is priced manually — type the rate and Save.{' '}
+            <strong className="text-text-primary">Spread</strong> is in points (1pt = 0.01), a fixed discount
+            given back to every customer on this pair (rate + fee − spread);{' '}
+            <strong className="text-text-primary">Rounding</strong> sets the decimals quoted to customers.
           </span>
         </div>
       </div>
