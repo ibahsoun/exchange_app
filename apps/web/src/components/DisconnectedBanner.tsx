@@ -1,14 +1,32 @@
+import { useEffect, useState } from 'react';
 import { WifiOff } from 'lucide-react';
 import { useRatesConnected } from '@/hooks/useRates';
 
+/** How long the feed may be down before we alarm the user. */
+const GRACE_MS = 6000;
+
 /**
- * Sticky banner shown when the WebSocket connection to the rates
- * service is lost. Renders nothing when connected.
+ * Sticky banner shown when the connection to the rates service is lost.
+ * Renders nothing when connected.
+ *
+ * The store starts disconnected, so rendering purely on `connected` flashed
+ * "API Disconnected" on every page load and during each brief reconnect.
+ * Wait out a grace period first — the header shows "Connecting..." meanwhile.
  */
 export function DisconnectedBanner() {
   const connected = useRatesConnected();
+  const [showBanner, setShowBanner] = useState(false);
 
-  if (connected) return null;
+  useEffect(() => {
+    if (connected) {
+      setShowBanner(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowBanner(true), GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [connected]);
+
+  if (!showBanner) return null;
 
   return (
     <div

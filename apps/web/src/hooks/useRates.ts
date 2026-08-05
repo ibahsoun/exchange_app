@@ -44,12 +44,18 @@ export function useRatesConnection() {
 
     fetchInitial();
 
-    // 2. WebSocket connection
-    // Try websocket first but fall back to HTTP long-polling: some
-    // proxies/extensions block websocket upgrades while plain HTTP works,
-    // which used to strand the client on a permanent "disconnected" banner.
+    // 2. Realtime connection — HTTP long-polling only, upgrade disabled.
+    // The network this terminal runs on completes the websocket upgrade
+    // (nginx logs a 101) and then silently kills the connection a moment
+    // later. The upgrade *probe* is short enough to survive that, so
+    // socket.io switches transports and the session dies immediately after;
+    // it then reconnects and repeats, leaving a permanent "API Disconnected"
+    // banner. Long-polling uses the same plain HTTP as the REST calls, which
+    // are unaffected, so it stays up. Do not re-enable `upgrade` without
+    // testing on the branch network.
     const socket = io(`${WS_URL}/ws/rates`, {
-      transports: ['websocket', 'polling'],
+      transports: ['polling'],
+      upgrade: false,
       reconnection: true,
       reconnectionDelay: 2000,
       reconnectionAttempts: Infinity,

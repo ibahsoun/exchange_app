@@ -77,8 +77,10 @@ for _ in $(seq 1 20); do
   health=$(run "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$PORT/api/health" || true)
   [[ "$health" == "200" ]] && break
 done
-page=$(run "curl -s -o /dev/null -w '%{http_code}' -H 'Host: exchange.ibahsoun.com' http://127.0.0.1/" || true)
-bundle=$(run "curl -s -H 'Host: exchange.ibahsoun.com' http://127.0.0.1/ | grep -o 'assets/index-[^\"]*\.js'" || true)
+# Port 80 always 301s to HTTPS (certbot --redirect), so check the TLS vhost.
+# --resolve pins the domain to localhost so the request never leaves the box.
+page=$(run "curl -s -o /dev/null -w '%{http_code}' --resolve exchange.ibahsoun.com:443:127.0.0.1 https://exchange.ibahsoun.com/" || true)
+bundle=$(run "curl -s --resolve exchange.ibahsoun.com:443:127.0.0.1 https://exchange.ibahsoun.com/ | grep -o 'assets/index-[^\"]*\.js'" || true)
 
 echo "  api health : $health"
 echo "  site       : $page"
